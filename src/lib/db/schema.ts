@@ -1,0 +1,165 @@
+import { sqliteTable, text, integer, real, primaryKey } from "drizzle-orm/sqlite-core";
+
+// Fixed UUID for the seed admin user. Referenced from the 0003 migration so
+// the app has a known tenant to attribute pre-existing data to; once Clerk is
+// wired up, the auth stub swaps from "always this id" to a real session lookup.
+export const SEED_ADMIN_ID = "00000000-0000-0000-0000-000000000001";
+
+export const users = sqliteTable("users", {
+  id: text("id").primaryKey(),
+  clerkUserId: text("clerk_user_id"),
+  email: text("email"),
+  displayName: text("display_name"),
+  // SQLite has no boolean: 0/1 integer. Keep as integer so drizzle doesn't
+  // coerce — callers treat truthy == admin.
+  isAdmin: integer("is_admin").notNull().default(0),
+  credits: integer("credits").notNull().default(0),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const books = sqliteTable("books", {
+  id: text("id").primaryKey(),
+  title: text("title").notNull(),
+  author: text("author").notNull().default("Unknown"),
+  sourceLang: text("source_lang").notNull(), // ja | zh | en
+  coverPath: text("cover_path"),
+  filePath: text("file_path").notNull(),
+  totalChapters: integer("total_chapters").notNull().default(0),
+  status: text("status").notNull().default("pending"), // pending | parsed | error
+  // Tenancy: nullable only for compatibility with historical rows before
+  // migration 0003; new inserts should always set this.
+  userId: text("user_id").references(() => users.id),
+  // 'public' = showcase book visible to all; 'private' = only owner sees it.
+  visibility: text("visibility").notNull().default("public"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const chapters = sqliteTable("chapters", {
+  id: text("id").primaryKey(),
+  bookId: text("book_id").notNull().references(() => books.id, { onDelete: "cascade" }),
+  index: integer("index").notNull(),
+  title: text("title").notNull(),
+  sourceHtml: text("source_html").notNull(),
+  status: text("status").notNull().default("pending"), // pending | translating | done | error
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const paragraphs = sqliteTable("paragraphs", {
+  id: text("id").primaryKey(),
+  chapterId: text("chapter_id").notNull().references(() => chapters.id, { onDelete: "cascade" }),
+  seq: integer("seq").notNull(),
+  sourceText: text("source_text").notNull(),
+  sourceMarkup: text("source_markup").notNull(),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const translations = sqliteTable("translations", {
+  id: text("id").primaryKey(),
+  paragraphId: text("paragraph_id").notNull().references(() => paragraphs.id, { onDelete: "cascade" }),
+  lang: text("lang").notNull(), // zh | en | ja
+  text: text("text").notNull().default(""),
+  status: text("status").notNull().default("pending"), // pending | processing | done | failed
+  model: text("model"),
+  tokensUsed: integer("tokens_used"),
+  errorMessage: text("error_message"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const readingProgress = sqliteTable("reading_progress", {
+  id: text("id").primaryKey(),
+  bookId: text("book_id").notNull().references(() => books.id, { onDelete: "cascade" }),
+  userId: text("user_id").references(() => users.id),
+  chapterIndex: integer("chapter_index").notNull().default(0),
+  scrollPosition: real("scroll_position").notNull().default(0),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+export const dictionaries = sqliteTable("dictionaries", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  format: text("format").notNull(), // 'jmdict' | 'cedict'
+  sourceLang: text("source_lang").notNull(), // 'ja' | 'zh'
+  // Target language of the gloss text. JMdict_e / CC-CEDICT are both 'en';
+  // the multi-language JMdict distribution additionally lets us install a
+  // 'zh' / 'de' / ... variant of the same source_lang. Lookup ignores this
+  // field but the UI groups by (source,target) so users pick the right one.
+  targetLang: text("target_lang").notNull().default("en"),
+  entryCount: integer("entry_count").notNull().default(0),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// Note: dict_entries is an FTS5 virtual table created via raw SQL migration.
+// Drizzle's schema DSL does not support FTS5, so we interact with it via
+// sqlite.prepare() directly in src/lib/dict/*.
+
+export const vocabulary = sqliteTable("vocabulary", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").references(() => users.id),
+  word: text("word").notNull(),
+  lang: text("lang").notNull(), // 'ja' | 'zh' | 'en'
+  reading: text("reading"),
+  gloss: text("gloss").notNull(),
+  note: text("note"),
+  sourceBookId: text("source_book_id"), // nullable, no cascade
+  sourceContext: text("source_context"),
+  // SRS fields — see src/lib/vocab/srs.ts. nextReviewAt is null for entries
+  // that have never been reviewed; those are treated as "due now" so they
+  // show up in the first review session.
+  stage: integer("stage").notNull().default(0),
+  nextReviewAt: text("next_review_at"),
+  lastReviewedAt: text("last_reviewed_at"),
+  correctCount: integer("correct_count").notNull().default(0),
+  incorrectCount: integer("incorrect_count").notNull().default(0),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// Collections: a user's named bundle of books (a series, a mood shelf).
+// The cover image shown for the collection is inherited from whichever
+// book sits at the smallest seq — we don't store a cover on the
+// collection itself so renames/moves in collection_books automatically
+// propagate without a separate update path.
+export const collections = sqliteTable("collections", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id),
+  name: text("name").notNull(),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// Join table. A book can belong to multiple collections (same book in
+// "Currently reading" and "Fantasy" is legal); composite PK prevents
+// duplicate inserts. seq is the display order inside the collection
+// AND the tie-breaker for "which cover wins" — lowest seq = cover.
+export const collectionBooks = sqliteTable(
+  "collection_books",
+  {
+    collectionId: text("collection_id")
+      .notNull()
+      .references(() => collections.id, { onDelete: "cascade" }),
+    bookId: text("book_id")
+      .notNull()
+      .references(() => books.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull().default(0),
+    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.collectionId, t.bookId] }),
+  }),
+);
+
+// Paywall: presence of a row means "user has paid to translate/read this
+// chapter". Public books and admin users skip the check entirely — see
+// src/lib/billing. credits_spent is auditing only; the spend is computed
+// against users.credits at purchase time.
+export const chapterAccess = sqliteTable("chapter_access", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id),
+  chapterId: text("chapter_id").notNull().references(() => chapters.id, { onDelete: "cascade" }),
+  creditsSpent: integer("credits_spent").notNull().default(0),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});

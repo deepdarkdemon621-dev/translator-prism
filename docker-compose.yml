@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3100:3000"
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - app-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  app-data:

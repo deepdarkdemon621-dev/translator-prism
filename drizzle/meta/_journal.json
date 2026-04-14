@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1775790705251,
+      "tag": "0000_daily_marauders",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1776200000000,
+      "tag": "0001_dict_and_vocabulary",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1776700000000,
+      "tag": "0002_vocab_srs",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1776800000000,
+      "tag": "0003_users_and_tenancy",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1776900000000,
+      "tag": "0004_dict_target_lang",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1777000000000,
+      "tag": "0005_collections",
+      "breakpoints": true
+    }
+  ]
+}
