@@ -62,6 +62,9 @@ export const paragraphs = sqliteTable("paragraphs", {
   seq: integer("seq").notNull(),
   sourceText: text("source_text").notNull(),
   sourceMarkup: text("source_markup").notNull(),
+  // "text" for <p> rows, "image" for <img> rows. Translation pipeline
+  // filters to kind = 'text'; reader + exporter render both in seq order.
+  kind: text("kind", { enum: ["text", "image"] }).notNull().default("text"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 

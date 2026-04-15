@@ -50,6 +50,13 @@
       "when": 1778000000000,
       "tag": "0006_folder_collections",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1776240346611,
+      "tag": "0007_paragraph_kind",
+      "breakpoints": true
     }
   ]
 }
