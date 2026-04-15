@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { translations, chapters } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { getTranslationQueue } from "@/lib/queue/translation-queue";
 import { checkChapterDone } from "@/lib/chapter-status";
 import { loadParagraphForWrite } from "@/lib/access";
@@ -73,10 +73,20 @@ export async function POST(
               tokensUsed: result.tokensUsed,
               updatedAt: new Date().toISOString(),
             })
-            .where(eq(translations.id, t.id))
+            .where(
+              and(
+                eq(translations.id, t.id),
+                ne(translations.status, "cancelled"),
+              ),
+            )
             .run();
           await checkChapterDone(para.chapterId);
-        })();
+        })().catch((err) => {
+          console.error(
+            "[retry:onComplete] failed to persist translation result:",
+            err,
+          );
+        });
       },
       onError: (error) => {
         void (async () => {
@@ -87,10 +97,20 @@ export async function POST(
               errorMessage: error.message,
               updatedAt: new Date().toISOString(),
             })
-            .where(eq(translations.id, t.id))
+            .where(
+              and(
+                eq(translations.id, t.id),
+                ne(translations.status, "cancelled"),
+              ),
+            )
             .run();
           await checkChapterDone(para.chapterId);
-        })();
+        })().catch((err) => {
+          console.error(
+            "[retry:onError] failed to persist translation failure:",
+            err,
+          );
+        });
       },
     });
   }

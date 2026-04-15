@@ -139,10 +139,12 @@ export class InsufficientCreditsError extends Error {
 }
 
 /**
- * Debit the user's balance and insert chapter_access rows. Atomic per
- * better-sqlite3's default synchronous transaction — if the balance
- * check fails midway we roll back so neither side drifts. `chapterIds`
- * that the user already owns are silently skipped (not double-charged).
+ * Debit the user's balance and insert chapter_access rows. NOT currently
+ * atomic — libsql is a remote async driver and these writes are issued
+ * one at a time, so a mid-sequence failure can leave the balance debited
+ * without the matching chapter_access rows (or vice versa). Wrapping in
+ * a real transaction is a follow-up. `chapterIds` that the user already
+ * owns are silently skipped (not double-charged).
  *
  * Returns the actual credits spent and how many rows were newly granted.
  * Caller is responsible for having already verified that the book
@@ -162,10 +164,10 @@ export async function purchaseChapters(
   // system can treat ownership uniformly.
   const discountPct = options.discountPct ?? 0;
 
-  // better-sqlite3 is synchronous and single-threaded in this process, so
-  // the read-then-write window below is safe from concurrent purchases
-  // as long as no other tab/process is racing. When we move to Postgres
-  // for cloud, wrap this body in a real transaction.
+  // Read-then-write window below is NOT protected against concurrent
+  // purchases — two parallel requests from the same user could both pass
+  // the balance check and double-spend. Wrap this body in a libsql
+  // transaction (or a server-side lock) as a follow-up.
 
   const existing = await db
     .select({ chapterId: chapterAccess.chapterId })

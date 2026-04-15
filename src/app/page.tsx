@@ -221,9 +221,8 @@ export default function HomePage() {
         </div>
         <nav className="flex items-center gap-1 text-sm animate-in fade-in duration-700 delay-100">
           <CreditsBadge />
-          {/* Account menu — sign-out lives here. Clerk handles the dropdown
-              UI; `afterSignOutUrl` returns the user to /sign-in via the
-              proxy.ts matcher. */}
+          {/* Account menu — sign-out lives here. Clerk 7 drops the
+              `afterSignOutUrl` prop; sign-out flows through middleware. */}
           <UserButton />
           {isAdmin && (
             <>

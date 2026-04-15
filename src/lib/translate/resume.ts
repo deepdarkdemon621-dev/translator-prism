@@ -118,7 +118,12 @@ export async function resumePendingTranslations(): Promise<{
             )
             .run();
           await checkChapterDone(chapterId);
-        })();
+        })().catch((err) => {
+          console.error(
+            "[resume:onComplete] failed to persist translation result:",
+            err,
+          );
+        });
       },
       onError: (error) => {
         void (async () => {
@@ -137,7 +142,12 @@ export async function resumePendingTranslations(): Promise<{
             )
             .run();
           await checkChapterDone(chapterId);
-        })();
+        })().catch((err) => {
+          console.error(
+            "[resume:onError] failed to persist translation failure:",
+            err,
+          );
+        });
       },
     });
     requeued++;

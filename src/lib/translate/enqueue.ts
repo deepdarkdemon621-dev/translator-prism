@@ -167,7 +167,12 @@ export async function enqueueChapterTranslations(
               )
               .run();
             await checkChapterDone(chapterId);
-          })();
+          })().catch((err) => {
+            console.error(
+              "[enqueue:onComplete] failed to persist translation result:",
+              err,
+            );
+          });
         },
         onError: (error) => {
           void (async () => {
@@ -186,7 +191,12 @@ export async function enqueueChapterTranslations(
               )
               .run();
             await checkChapterDone(chapterId);
-          })();
+          })().catch((err) => {
+            console.error(
+              "[enqueue:onError] failed to persist translation failure:",
+              err,
+            );
+          });
         },
       });
 
