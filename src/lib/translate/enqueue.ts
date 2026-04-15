@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
 import { chapters, paragraphs, translations } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 const TARGET_LANGS: Record<string, string[]> = {
@@ -25,7 +25,7 @@ export async function enqueueChapterTranslations(
   let paras = await db
     .select()
     .from(paragraphs)
-    .where(eq(paragraphs.chapterId, chapterId))
+    .where(and(eq(paragraphs.chapterId, chapterId), eq(paragraphs.kind, "text")))
     .orderBy(paragraphs.seq)
     .all();
 
@@ -94,7 +94,7 @@ export async function enqueueChapterTranslations(
     paras = await db
       .select()
       .from(paragraphs)
-      .where(eq(paragraphs.chapterId, chapterId))
+      .where(and(eq(paragraphs.chapterId, chapterId), eq(paragraphs.kind, "text")))
       .orderBy(paragraphs.seq)
       .all();
   }
@@ -165,7 +165,7 @@ export async function estimateChapterWork(
   const paras = await db
     .select()
     .from(paragraphs)
-    .where(eq(paragraphs.chapterId, chapterId))
+    .where(and(eq(paragraphs.chapterId, chapterId), eq(paragraphs.kind, "text")))
     .all();
 
   const targetLangs = TARGET_LANGS[sourceLang] || ["zh", "en"];
