@@ -47,6 +47,11 @@ interface BookCardProps {
   /** Notify parent when a translate/cancel finished so the list can refetch
    * and update counts. Optional — older call-sites work without it. */
   onChange?: () => void;
+  /** When true, the card becomes a selection target: clicking it toggles
+   *  `selected` via `onSelectToggle` instead of navigating to Read. */
+  selectMode?: boolean;
+  selected?: boolean;
+  onSelectToggle?: (id: string) => void;
 }
 
 const LANG_LABELS: Record<string, string> = {
@@ -63,6 +68,9 @@ export function BookCard({
   onDelete,
   onMove,
   onChange,
+  selectMode = false,
+  selected = false,
+  onSelectToggle,
 }: BookCardProps) {
   const progress =
     book.totalChapters > 0
@@ -110,13 +118,52 @@ export function BookCard({
     }
   };
 
+  const selectHandlers = selectMode && onSelectToggle
+    ? {
+        onClick: (e: React.MouseEvent) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onSelectToggle(book.id);
+        },
+        role: "button" as const,
+        tabIndex: 0,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelectToggle(book.id);
+          }
+        },
+      }
+    : {};
+
   return (
-    <Card className="overflow-hidden border-border/50 shadow-sm hover:shadow-xl hover:-translate-y-0.5 hover:border-primary/30 transition-all duration-300 ease-out group">
+    <div className="relative" {...selectHandlers}>
+      {selectMode && (
+        <div
+          className={`absolute top-2 left-2 z-10 h-5 w-5 rounded border-2 flex items-center justify-center pointer-events-none transition-colors ${
+            selected
+              ? "bg-primary border-primary text-primary-foreground"
+              : "bg-background/90 border-border/80"
+          }`}
+          aria-hidden
+        >
+          {selected && (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          )}
+        </div>
+      )}
+      <Card
+        className={`overflow-hidden border-border/50 shadow-sm hover:shadow-xl hover:-translate-y-0.5 hover:border-primary/30 transition-all duration-300 ease-out group ${
+          selectMode ? "cursor-pointer" : ""
+        } ${selected ? "ring-2 ring-primary ring-offset-2" : ""}`}
+      >
       <div className="flex">
         {/* Cover thumbnail — left side, fixed width, 2:3 book proportion.
             Using a fixed width (not aspect) so the content column can flex
             to fill the remaining card width regardless of card size. */}
-        <div className="relative w-20 sm:w-24 aspect-[2/3] shrink-0 overflow-hidden bg-muted/40">
+        <div className={`relative w-20 sm:w-24 aspect-[2/3] shrink-0 overflow-hidden bg-muted/40 ${selectMode ? "pointer-events-none" : ""}`}>
           {book.coverPath ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -142,7 +189,7 @@ export function BookCard({
             </span>
           )}
         </div>
-        <CardContent className="flex-1 min-w-0 p-3 flex flex-col justify-between">
+        <CardContent className={`flex-1 min-w-0 p-3 flex flex-col justify-between ${selectMode ? "pointer-events-none" : ""}`}>
           <div>
             <div className="flex items-start justify-between gap-2 mb-1">
               <h3
@@ -257,6 +304,7 @@ export function BookCard({
           </div>
         </CardContent>
       </div>
-    </Card>
+      </Card>
+    </div>
   );
 }
