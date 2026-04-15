@@ -18,6 +18,14 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useSelection } from "@/components/library/useSelection";
+import { SelectionBar } from "@/components/library/SelectionBar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface Book {
   id: string;
@@ -54,6 +62,8 @@ export default function HomePage() {
   const [sweeping, setSweeping] = useState(false);
   const [cancellingAll, setCancellingAll] = useState(false);
   const [importing, setImporting] = useState(false);
+  const bookSelect = useSelection();
+  const collectionSelect = useSelection();
 
   const fetchBooks = useCallback(async () => {
     const res = await fetch("/api/books?scope=top");
@@ -202,6 +212,84 @@ export default function HomePage() {
     }
   };
 
+  const handleBulkDeleteBooks = async () => {
+    const ids = Array.from(bookSelect.selected);
+    if (ids.length === 0) return;
+    if (!confirm(`Delete ${ids.length} ${ids.length === 1 ? "book" : "books"}? This can't be undone.`)) return;
+    const res = await fetch("/api/books/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", ids }),
+    });
+    if (!res.ok) {
+      alert(`Delete failed: ${await res.text()}`);
+      return;
+    }
+    const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
+    if (data.failed.length > 0) {
+      alert(`${data.succeeded} of ${ids.length} deleted. ${data.failed.length} failed.`);
+      bookSelect.remove(ids.filter((id) => !data.failed.some((f) => f.id === id)));
+    } else {
+      bookSelect.exit();
+    }
+    fetchBooks();
+    fetchCollections();
+  };
+
+  const handleBulkMoveBooks = async (collectionId: string | null) => {
+    const ids = Array.from(bookSelect.selected);
+    if (ids.length === 0) return;
+    const res = await fetch("/api/books/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "move", ids, collectionId }),
+    });
+    if (!res.ok) {
+      alert(`Move failed: ${await res.text()}`);
+      return;
+    }
+    const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
+    if (data.failed.length > 0) {
+      alert(`${data.succeeded} of ${ids.length} moved. ${data.failed.length} failed.`);
+      bookSelect.remove(ids.filter((id) => !data.failed.some((f) => f.id === id)));
+    } else {
+      bookSelect.exit();
+    }
+    fetchBooks();
+    fetchCollections();
+  };
+
+  const handleBulkDeleteCollections = async () => {
+    const ids = Array.from(collectionSelect.selected);
+    if (ids.length === 0) return;
+    const totalBooks = collections
+      .filter((c) => collectionSelect.selected.has(c.id))
+      .reduce((n, c) => n + c.bookCount, 0);
+    const msg =
+      totalBooks > 0
+        ? `Delete ${ids.length} ${ids.length === 1 ? "collection" : "collections"} and all ${totalBooks} ${totalBooks === 1 ? "book" : "books"} inside them? This can't be undone.`
+        : `Delete ${ids.length} ${ids.length === 1 ? "collection" : "collections"}? This can't be undone.`;
+    if (!confirm(msg)) return;
+    const res = await fetch("/api/collections/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", ids }),
+    });
+    if (!res.ok) {
+      alert(`Delete failed: ${await res.text()}`);
+      return;
+    }
+    const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
+    if (data.failed.length > 0) {
+      alert(`${data.succeeded} of ${ids.length} deleted. ${data.failed.length} failed.`);
+      collectionSelect.remove(ids.filter((id) => !data.failed.some((f) => f.id === id)));
+    } else {
+      collectionSelect.exit();
+    }
+    fetchBooks();
+    fetchCollections();
+  };
+
   return (
     <div className="min-h-screen px-6 py-10 sm:py-14 max-w-6xl mx-auto">
       <header className="mb-12 flex items-start justify-between gap-6">
@@ -301,13 +389,25 @@ export default function HomePage() {
           <h2 className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
             Collections
           </h2>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCreateOpen(true)}
-          >
-            + New collection
-          </Button>
+          <div className="flex items-center gap-2">
+            {!collectionSelect.mode && collections.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={collectionSelect.enter}
+                className="hidden sm:inline-flex"
+              >
+                Select
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCreateOpen(true)}
+            >
+              + New collection
+            </Button>
+          </div>
         </div>
         {collections.length === 0 ? (
           <p className="text-sm text-muted-foreground italic"
@@ -323,7 +423,14 @@ export default function HomePage() {
                 className="stagger-fade-in"
                 style={{ animationDelay: `${200 + i * 60}ms` }}
               >
-                <CollectionCard collection={c} currentUserId={currentUser?.id} isAdmin={isAdmin} />
+                <CollectionCard
+                  collection={c}
+                  currentUserId={currentUser?.id}
+                  isAdmin={isAdmin}
+                  selectMode={collectionSelect.mode}
+                  selected={collectionSelect.selected.has(c.id)}
+                  onSelectToggle={collectionSelect.toggle}
+                />
               </div>
             ))}
           </div>
@@ -332,11 +439,21 @@ export default function HomePage() {
 
       {books.length > 0 ? (
         <section>
-          <h2
-            className="text-xs uppercase tracking-[0.2em] text-muted-foreground mb-5 animate-in fade-in duration-700 delay-200"
-          >
-            Library
-          </h2>
+          <div className="flex items-center justify-between mb-5 animate-in fade-in duration-700 delay-200">
+            <h2 className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+              Library
+            </h2>
+            {!bookSelect.mode && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={bookSelect.enter}
+                className="hidden sm:inline-flex"
+              >
+                Select
+              </Button>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {books.map((book, i) => (
               <div
@@ -344,7 +461,17 @@ export default function HomePage() {
                 className="stagger-fade-in"
                 style={{ animationDelay: `${250 + i * 60}ms` }}
               >
-                <BookCard book={book} onDelete={handleDelete} onChange={fetchBooks} currentUserId={currentUser?.id} collections={collections} onMove={handleMove} />
+                <BookCard
+                  book={book}
+                  onDelete={handleDelete}
+                  onChange={fetchBooks}
+                  currentUserId={currentUser?.id}
+                  collections={collections}
+                  onMove={handleMove}
+                  selectMode={bookSelect.mode}
+                  selected={bookSelect.selected.has(book.id)}
+                  onSelectToggle={bookSelect.toggle}
+                />
               </div>
             ))}
           </div>
@@ -401,6 +528,74 @@ export default function HomePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {bookSelect.mode && (
+        <SelectionBar
+          count={bookSelect.selected.size}
+          total={books.length}
+          noun="book"
+          onSelectAll={() => bookSelect.selectAll(books.map((b) => b.id))}
+          onClear={bookSelect.clear}
+          onDone={bookSelect.exit}
+        >
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={bookSelect.selected.size === 0}
+                >
+                  Move to…
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="center">
+              <DropdownMenuItem onClick={() => handleBulkMoveBooks(null)}>
+                Top level
+              </DropdownMenuItem>
+              {collections.map((c) => (
+                <DropdownMenuItem key={c.id} onClick={() => handleBulkMoveBooks(c.id)}>
+                  {c.name}
+                </DropdownMenuItem>
+              ))}
+              {collections.length === 0 && (
+                <DropdownMenuItem disabled>No collections</DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={bookSelect.selected.size === 0}
+            onClick={handleBulkDeleteBooks}
+            className="text-destructive hover:bg-destructive/10 hover:border-destructive/40"
+          >
+            Delete
+          </Button>
+        </SelectionBar>
+      )}
+
+      {collectionSelect.mode && (
+        <SelectionBar
+          count={collectionSelect.selected.size}
+          total={collections.length}
+          noun="collection"
+          onSelectAll={() => collectionSelect.selectAll(collections.map((c) => c.id))}
+          onClear={collectionSelect.clear}
+          onDone={collectionSelect.exit}
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={collectionSelect.selected.size === 0}
+            onClick={handleBulkDeleteCollections}
+            className="text-destructive hover:bg-destructive/10 hover:border-destructive/40"
+          >
+            Delete
+          </Button>
+        </SelectionBar>
+      )}
     </div>
   );
 }
