@@ -3,6 +3,14 @@ import path from "path";
 import type { LLMProvider, TranslationResult } from "../llm/types";
 import { createProvider } from "../llm/factory";
 
+/**
+ * DEPRECATED — the LLM settings helpers below (`SETTINGS_PATH`,
+ * `loadLLMSettings`, `getActiveProviderName`, `isLocalProvider`) are
+ * duplicated here only so that existing imports of `getTranslationQueue`
+ * / `resetTranslationQueue` keep this file loading cleanly. For new code
+ * import from `@/lib/llm/settings`. Removed entirely in Task 10
+ * (queue deletion).
+ */
 const SETTINGS_PATH = path.join(process.cwd(), "data", "settings.json");
 
 interface LLMSettings {

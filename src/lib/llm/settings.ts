@@ -33,6 +33,8 @@ export function loadLLMSettings(): LLMSettings {
     const data = fs.readFileSync(SETTINGS_PATH, "utf-8");
     const parsed = JSON.parse(data);
     const provider = parsed.llm?.provider ?? "claude";
+    // Empty-string fallback is intentional: `createProvider` requires
+    // `string`, and the provider layer treats `""` as "use env / SDK default".
     const apiKey =
       provider === "claude" && process.env.ANTHROPIC_API_KEY
         ? process.env.ANTHROPIC_API_KEY
@@ -42,7 +44,10 @@ export function loadLLMSettings(): LLMSettings {
       apiKey,
       concurrency: parsed.llm?.concurrency ?? 2,
     };
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn("[llm-settings] could not load settings.json:", err);
+    }
     return { provider: "claude", apiKey: "", concurrency: 2 };
   }
 }

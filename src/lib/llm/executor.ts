@@ -62,10 +62,14 @@ export async function runTranslation(translationId: string): Promise<void> {
       .update(translations)
       .set({
         status: "failed",
-        errorMessage: (err as Error).message,
+        errorMessage: err instanceof Error ? err.message : String(err),
         updatedAt: new Date().toISOString(),
       })
       .where(and(eq(translations.id, translationId), ne(translations.status, "cancelled")));
-    await checkChapterDone(row.chapterId);
+    try {
+      await checkChapterDone(row.chapterId);
+    } catch (chkErr) {
+      console.error("[executor] checkChapterDone after failure threw:", chkErr);
+    }
   }
 }
