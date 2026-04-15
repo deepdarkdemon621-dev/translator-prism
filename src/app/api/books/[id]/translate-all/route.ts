@@ -11,7 +11,7 @@ import {
 import {
   getActiveProviderName,
   isLocalProvider,
-} from "@/lib/queue/translation-queue";
+} from "@/lib/llm/settings";
 
 // Blended cost estimate per 1M tokens. Intentionally conservative — the
 // user asked us to flag cost for remote providers, and we'd rather

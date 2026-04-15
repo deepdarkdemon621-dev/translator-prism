@@ -10,7 +10,7 @@ import {
 import {
   getActiveProviderName,
   isLocalProvider,
-} from "@/lib/queue/translation-queue";
+} from "@/lib/llm/settings";
 
 const EST_COST_PER_MTOK_USD = 0.75;
 
