@@ -32,7 +32,6 @@
   ],
   "exclude": [
     "node_modules",
-    "src/**/__tests__/**",
-    "src/lib/db/migrate.ts"
+    "src/**/__tests__/**"
   ]
 }
