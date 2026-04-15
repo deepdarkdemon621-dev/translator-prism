@@ -10,6 +10,16 @@ import { randomUUID } from "crypto";
 
 const MAX_SIZE = 50 * 1024 * 1024; // 50MB
 
+/** Replace every `src="images/{filename}"` (the parser's relative form) with
+ * the absolute API route. Operates on raw HTML/markup strings; no parsing
+ * required because the parser only emits this exact pattern for image rows. */
+function rewriteImageSrcs(html: string, bookId: string): string {
+  return html.replace(
+    /src="images\/([^"]+)"/g,
+    (_m, fname) => `src="/api/books/${bookId}/images/${fname}"`,
+  );
+}
+
 export async function POST(request: NextRequest) {
   ensureDataDir();
   const user = await getCurrentUser();
@@ -49,6 +59,18 @@ export async function POST(request: NextRequest) {
 
     // Parse EPUB
     const parsed = await parseEpub(buffer);
+
+    // Persist images under {bookId}/images/{filename}. Writes happen before
+    // the DB transaction so a partial-write failure aborts the upload with
+    // no orphaned rows. Storage writes that *do* succeed before a later
+    // failure are acceptable garbage (no GC job today — next upload for
+    // the same file would just overwrite).
+    for (const img of parsed.images) {
+      await getUploadsStorage().put(
+        `${bookId}/images/${img.filename}`,
+        img.bytes,
+      );
+    }
 
     // Persist the cover image (if any) alongside the EPUB itself. We
     // store it in a separate bucket so the public cover URL doesn't leak
@@ -122,7 +144,7 @@ export async function POST(request: NextRequest) {
         bookId,
         index: i,
         title: ch.title,
-        sourceHtml: ch.sourceHtml,
+        sourceHtml: rewriteImageSrcs(ch.sourceHtml, bookId),
         status: "pending" as const,
       }));
       if (chapterRows.length > 0) {
@@ -138,7 +160,11 @@ export async function POST(request: NextRequest) {
           chapterId: firstChapterId,
           seq: j,
           sourceText: p.text,
-          sourceMarkup: p.markup,
+          sourceMarkup:
+            p.kind === "image"
+              ? rewriteImageSrcs(p.markup, bookId)
+              : p.markup,
+          kind: p.kind,
         }));
         for (let i = 0; i < paragraphRows.length; i += 500) {
           await tx.insert(paragraphs).values(paragraphRows.slice(i, i + 500));

@@ -65,14 +65,19 @@ class LocalFsStorage implements Storage {
   constructor(private readonly baseDir: string) {}
 
   private resolve(key: string): string {
-    // Defense in depth against `..` and absolute paths. The routes already
-    // validate filenames but we enforce it here too so a backend swap
+    // Defense in depth against path traversal and absolute paths. The routes
+    // already validate filenames, but we enforce it here too so a backend swap
     // doesn't silently widen the attack surface.
-    const safe = path.basename(key);
-    if (safe !== key) {
+    // Keys may contain forward slashes for sub-paths (e.g. `{bookId}/images/{file}`).
+    // Each segment must be non-empty and must not be "..".
+    const segments = key.split("/");
+    if (
+      segments.length === 0 ||
+      segments.some((s) => s === "" || s === ".." || s === ".")
+    ) {
       throw new Error(`Invalid storage key: ${key}`);
     }
-    return path.join(this.baseDir, safe);
+    return path.join(this.baseDir, ...segments);
   }
 
   private async ensureDir(): Promise<void> {
@@ -80,8 +85,9 @@ class LocalFsStorage implements Storage {
   }
 
   async put(key: string, data: Buffer | string): Promise<void> {
-    await this.ensureDir();
-    await fsPromises.writeFile(this.resolve(key), data);
+    const resolved = this.resolve(key);
+    await fsPromises.mkdir(path.dirname(resolved), { recursive: true });
+    await fsPromises.writeFile(resolved, data);
   }
 
   async get(key: string): Promise<Buffer> {
@@ -99,9 +105,10 @@ class LocalFsStorage implements Storage {
 
   openWriteStream(key: string): StorageWriteHandle {
     // Directory must exist before the stream opens — createWriteStream
-    // doesn't mkdir.
-    fs.mkdirSync(this.baseDir, { recursive: true });
-    const stream = fs.createWriteStream(this.resolve(key));
+    // doesn't mkdir. Use the resolved path's parent so sub-path keys work.
+    const resolved = this.resolve(key);
+    fs.mkdirSync(path.dirname(resolved), { recursive: true });
+    const stream = fs.createWriteStream(resolved);
     const done = new Promise<void>((resolve, reject) => {
       stream.on("close", () => resolve());
       stream.on("error", reject);
@@ -135,14 +142,18 @@ class R2Storage implements Storage {
   }
 
   private keyOf(key: string): string {
-    // Match LocalFsStorage.resolve: callers pass flat keys (e.g. `${bookId}.epub`).
-    // Rejecting anything else keeps both backends' contracts identical so
-    // a driver swap doesn't silently change what keys are accepted.
-    const safe = path.basename(key);
-    if (safe !== key) {
+    // Keys may contain forward slashes for sub-paths (e.g. `{bookId}/images/{file}`).
+    // Each segment must be non-empty and must not be ".." or ".".
+    // This matches the validation in LocalFsStorage.resolve so both backends
+    // accept the same key space.
+    const segments = key.split("/");
+    if (
+      segments.length === 0 ||
+      segments.some((s) => s === "" || s === ".." || s === ".")
+    ) {
       throw new Error(`Invalid storage key: ${key}`);
     }
-    return `${this.prefix}/${safe}`;
+    return `${this.prefix}/${key}`;
   }
 
   async put(key: string, data: Buffer | string): Promise<void> {
