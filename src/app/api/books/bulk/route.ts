@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { books } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
-import { loadBookForWrite } from "@/lib/access";
 import { getCurrentUser } from "@/lib/auth";
 import { getUploadsStorage, getCoversStorage } from "@/lib/storage";
 import { moveBookToCollection } from "@/lib/collections";
@@ -42,7 +41,8 @@ export async function POST(request: NextRequest) {
   }
 
   if (body.action === "delete") {
-    return await doDelete(ids);
+    const user = await getCurrentUser();
+    return await doDelete(ids, user.id, user.isAdmin);
   }
   if (body.action === "move") {
     const target =
@@ -57,29 +57,29 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    return await doMove(ids, target);
+    const user = await getCurrentUser();
+    return await doMove(ids, target, user.id, user.isAdmin);
   }
 
   return NextResponse.json({ error: "action must be 'delete' or 'move'" }, { status: 400 });
 }
 
-async function doDelete(ids: string[]) {
+async function doDelete(ids: string[], userId: string, isAdmin: boolean) {
   const db = getDb();
   const succeeded: string[] = [];
   const failed: Array<{ id: string; error: string }> = [];
 
   for (const id of ids) {
     try {
-      const result = await loadBookForWrite(id);
-      if (!result.book) {
+      const book = await db.select().from(books).where(eq(books.id, id)).get();
+      if (!book) {
         failed.push({ id, error: "not found" });
         continue;
       }
-      if (result.forbidden) {
+      if (!isAdmin && book.userId !== userId) {
         failed.push({ id, error: "forbidden" });
         continue;
       }
-      const { book } = result;
       await getUploadsStorage().delete(book.filePath);
       if (book.coverPath) {
         await getCoversStorage().delete(book.coverPath);
@@ -94,8 +94,12 @@ async function doDelete(ids: string[]) {
   return NextResponse.json({ succeeded: succeeded.length, failed });
 }
 
-async function doMove(ids: string[], targetCollectionId: string | null) {
-  const user = await getCurrentUser();
+async function doMove(
+  ids: string[],
+  targetCollectionId: string | null,
+  userId: string,
+  isAdmin: boolean,
+) {
   const succeeded: string[] = [];
   const failed: Array<{ id: string; error: string }> = [];
 
@@ -104,8 +108,8 @@ async function doMove(ids: string[], targetCollectionId: string | null) {
       await moveBookToCollection({
         bookId: id,
         targetCollectionId,
-        actingUserId: user.id,
-        actingIsAdmin: user.isAdmin,
+        actingUserId: userId,
+        actingIsAdmin: isAdmin,
       });
       succeeded.push(id);
     } catch (err) {
