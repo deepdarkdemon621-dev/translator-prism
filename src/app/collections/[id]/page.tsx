@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { translateAllWithGate } from "@/lib/translate/client";
 
 interface CollectionBook {
   id: string;
@@ -22,6 +23,7 @@ interface CollectionBook {
   coverPath: string | null;
   totalChapters: number;
   translatedChapters: number;
+  pendingTranslations: number;
   status: string;
   seq: number | null;
 }
@@ -54,6 +56,7 @@ export default function CollectionPage({
   const [notFound, setNotFound] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const fetchCollection = useCallback(async () => {
     const res = await fetch(`/api/collections/${id}`);
@@ -73,6 +76,43 @@ export default function CollectionPage({
   useEffect(() => {
     if (notFound) router.replace("/");
   }, [notFound, router]);
+
+  const handleTranslate = async (bookId: string) => {
+    setBusyId(bookId);
+    try {
+      const res = await translateAllWithGate(`/api/books/${bookId}/translate-all`);
+      if (res.cancelled) return;
+      if (res.error) {
+        alert(`Translate failed: ${res.error}`);
+        return;
+      }
+      if (res.queued > 0) {
+        alert(`Queued ${res.queued} translations${res.chaptersQueued ? ` across ${res.chaptersQueued} chapters` : ""}.`);
+        fetchCollection();
+      } else {
+        alert("Nothing to translate — everything looks done.");
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleCancelTranslate = async (book: CollectionBook) => {
+    if (!confirm(`Cancel ${book.pendingTranslations} pending translation(s)? In-flight calls can't be stopped but their results will be discarded.`)) return;
+    setBusyId(book.id);
+    try {
+      const res = await fetch(`/api/books/${book.id}/translate-cancel`, { method: "POST" });
+      if (!res.ok) {
+        alert(`Cancel failed: ${await res.text()}`);
+        return;
+      }
+      const data = await res.json();
+      alert(`Cancelled ${data.cancelled} translation(s).`);
+      fetchCollection();
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   const handleMoveOut = async (bookId: string) => {
     const res = await fetch(`/api/books/${bookId}/move`, {
@@ -253,6 +293,29 @@ export default function CollectionPage({
                   >
                     ↓
                   </Button>
+                  {book.translatedChapters < book.totalChapters && (
+                    book.pendingTranslations > 0 ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleCancelTranslate(book)}
+                        disabled={busyId === book.id}
+                        className="h-7 text-xs px-2 text-destructive hover:bg-destructive/10 hover:border-destructive/40"
+                      >
+                        {busyId === book.id ? "…" : `Cancel (${book.pendingTranslations})`}
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleTranslate(book.id)}
+                        disabled={busyId === book.id}
+                        className="h-7 text-xs px-2"
+                      >
+                        {busyId === book.id ? "…" : "Translate"}
+                      </Button>
+                    )
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"

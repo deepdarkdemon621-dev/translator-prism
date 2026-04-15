@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { books, chapters, collections } from "@/lib/db/schema";
-import { and, asc, count, eq } from "drizzle-orm";
+import { books, chapters, collections, paragraphs, translations } from "@/lib/db/schema";
+import { and, asc, count, eq, inArray } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 import { loadCollectionForView, loadOwnedCollection } from "@/lib/collections";
 
@@ -54,7 +54,36 @@ export async function GET(
         .from(chapters)
         .where(and(eq(chapters.bookId, b.id), eq(chapters.status, "done")))
         .all();
-      return { ...b, translatedChapters: doneRow[0]?.n || 0 };
+
+      const paraIds = (
+        await db
+          .select({ id: paragraphs.id })
+          .from(paragraphs)
+          .innerJoin(chapters, eq(chapters.id, paragraphs.chapterId))
+          .where(eq(chapters.bookId, b.id))
+          .all()
+      ).map((p) => p.id);
+
+      const pendingTranslations = paraIds.length
+        ? (
+            await db
+              .select({ n: count() })
+              .from(translations)
+              .where(
+                and(
+                  inArray(translations.paragraphId, paraIds),
+                  inArray(translations.status, ["pending", "processing"]),
+                ),
+              )
+              .all()
+          )[0]?.n || 0
+        : 0;
+
+      return {
+        ...b,
+        translatedChapters: doneRow[0]?.n || 0,
+        pendingTranslations,
+      };
     }),
   );
 
