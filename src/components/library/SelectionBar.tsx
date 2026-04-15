@@ -50,7 +50,7 @@ export function SelectionBar({
         <div className="h-5 w-px bg-border/60 mx-1" />
         {children}
         <div className="h-5 w-px bg-border/60 mx-1" />
-        <Button variant="ghost" size="sm" onClick={onDone}>
+        <Button variant="ghost" size="sm" onClick={onDone} className="rounded-full">
           Done
         </Button>
       </div>
