@@ -89,17 +89,21 @@ export async function exportHtmlZip(bookId: string): Promise<string> {
   const fileName = `${bookId}.zip`;
   // openWriteStream is the streaming escape hatch — archiver needs a
   // real stream sink, not a buffer. Local backend returns an fs write
-  // stream; cloud backends will wrap a multipart upload.
-  const output = getExportsStorage().openWriteStream(fileName);
+  // stream; cloud backends wrap a multipart upload. `done` resolves
+  // only when the backend has durably committed every byte (fs close /
+  // S3 multipart complete) — awaiting `output.on("close")` would lie
+  // for R2 since the PassThrough closes well before the upload finishes.
+  const { stream: output, done } = getExportsStorage().openWriteStream(fileName);
   const archive = archiver("zip", { zlib: { level: 9 } });
 
-  const closed = new Promise<void>((resolve, reject) => {
-    output.on("close", () => resolve());
-    output.on("error", reject);
-    archive.on("error", reject);
-    archive.on("warning", (w) => {
-      if (w.code !== "ENOENT") reject(w);
-    });
+  // Forward archiver errors/warnings to the output stream so the
+  // underlying `done` promise rejects with them (and any S3 multipart
+  // in flight gets aborted via stream destruction).
+  archive.on("error", (err) => {
+    output.destroy(err);
+  });
+  archive.on("warning", (w) => {
+    if (w.code !== "ENOENT") output.destroy(w);
   });
 
   archive.pipe(output);
@@ -179,8 +183,8 @@ h1{text-align:center;color:#e94560;}h2{color:#ccc;}`,
   indexHtml += "</ul></body></html>";
   archive.append(indexHtml, { name: "index.html" });
 
-  archive.finalize();
-  await closed;
+  await archive.finalize();
+  await done;
 
   return fileName;
 }

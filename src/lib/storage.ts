@@ -1,7 +1,7 @@
 import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
-import { PassThrough } from "stream";
+import { PassThrough, type Writable } from "stream";
 import {
   S3Client,
   PutObjectCommand,
@@ -22,6 +22,26 @@ import { Upload } from "@aws-sdk/lib-storage";
  * Concrete backends live below this interface. `LocalFsStorage` is the
  * current default; `R2Storage` is selected when `STORAGE_DRIVER=r2`.
  */
+/**
+ * Pair returned by `openWriteStream`. The `stream` is the writable sink
+ * the producer pipes into; `done` resolves only once the underlying
+ * backend has *durably* committed every byte (fs close / S3 multipart
+ * complete). Awaiting `stream`'s `close` event is not enough on cloud
+ * backends — for `R2Storage` that fires when the archiver closes the
+ * PassThrough, well before `Upload.done()` finishes the multipart.
+ */
+export interface StorageWriteHandle {
+  /**
+   * The writable sink. Typed as `Writable` (not `NodeJS.WritableStream`)
+   * so callers can `destroy(err)` on archiver errors to abort an
+   * in-flight upload — both `fs.WriteStream` and `PassThrough` extend
+   * `Writable`, so this works for both backends.
+   */
+  stream: Writable;
+  /** Resolves when all bytes are durably written. Rejects on write failure. */
+  done: Promise<void>;
+}
+
 export interface Storage {
   /** Write a blob at `key`, replacing any existing object. */
   put(key: string, data: Buffer | string): Promise<void>;
@@ -35,15 +55,10 @@ export interface Storage {
   /**
    * Escape hatch for producers that only know how to write through a
    * node stream (archiver, large-upload multiparts). Callers must close
-   * the returned stream to finalize the write. The local backend pipes
-   * through to `fs.createWriteStream`; a cloud backend will wrap a
-   * PassThrough with an S3 multipart upload attached to its `finish`.
-   *
-   * Return type is narrowed to `NodeJS.WritableStream` so backends that
-   * don't use `fs` (R2's PassThrough) don't need an unsound cast.
-   * `fs.WriteStream` satisfies this — local callers keep working.
+   * the returned `stream` to finalize the write, then `await done` to
+   * wait for the backend to confirm durability.
    */
-  openWriteStream(key: string): NodeJS.WritableStream;
+  openWriteStream(key: string): StorageWriteHandle;
 }
 
 class LocalFsStorage implements Storage {
@@ -82,11 +97,16 @@ class LocalFsStorage implements Storage {
     }
   }
 
-  openWriteStream(key: string): fs.WriteStream {
+  openWriteStream(key: string): StorageWriteHandle {
     // Directory must exist before the stream opens — createWriteStream
     // doesn't mkdir.
     fs.mkdirSync(this.baseDir, { recursive: true });
-    return fs.createWriteStream(this.resolve(key));
+    const stream = fs.createWriteStream(this.resolve(key));
+    const done = new Promise<void>((resolve, reject) => {
+      stream.on("close", () => resolve());
+      stream.on("error", reject);
+    });
+    return { stream, done };
   }
 }
 
@@ -157,25 +177,33 @@ class R2Storage implements Storage {
     );
   }
 
-  openWriteStream(key: string): NodeJS.WritableStream {
-    const pass = new PassThrough();
+  openWriteStream(key: string): StorageWriteHandle {
+    const stream = new PassThrough();
     const upload = new Upload({
       client: this.client,
       params: {
         Bucket: this.bucket,
         Key: this.keyOf(key),
-        Body: pass,
+        Body: stream,
       },
     });
-    // Defer the error emit: `upload.done()` can reject synchronously
-    // (bad creds, invalid key, etc.) before the caller has attached an
-    // `error` listener. An un-listened `error` event crashes the
-    // process. `queueMicrotask` gives the caller one tick to wire up
-    // listeners without delaying propagation to the next I/O turn.
-    upload.done().catch((err) => {
-      queueMicrotask(() => pass.emit("error", err));
-    });
-    return pass;
+    // `done` resolves when S3 multipart completes and rejects on upload
+    // failure — this is the only safe signal the producer can await for
+    // R2 durability. We also re-emit the error on the stream so writers
+    // observing `error` events get notified (matching `fs.WriteStream`
+    // disk-error behavior). The `queueMicrotask` defer preserves the
+    // listener-race fix from Task 4: `upload.done()` can reject
+    // synchronously (bad creds, invalid key, etc.) before the caller
+    // has attached an `error` listener, and an un-listened `error`
+    // event crashes the process.
+    const done = upload.done().then(
+      () => undefined,
+      (err) => {
+        queueMicrotask(() => stream.emit("error", err));
+        throw err;
+      },
+    );
+    return { stream, done };
   }
 }
 
