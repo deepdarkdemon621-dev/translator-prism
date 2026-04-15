@@ -113,6 +113,12 @@ export default function VocabularyPage() {
     if (res.ok) fetchEntries();
   };
 
+  const handleReset = async (id: string) => {
+    if (!confirm("Reset this card back to New and make it due now?")) return;
+    const res = await fetch(`/api/vocabulary/${id}/reset`, { method: "POST" });
+    if (res.ok) fetchEntries();
+  };
+
   return (
     <div className="min-h-screen px-6 py-10 sm:py-14 max-w-4xl mx-auto">
       <header className="mb-8 flex items-center gap-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -285,6 +291,16 @@ export default function VocabularyPage() {
                       <Button size="sm" variant="outline" onClick={() => setEditing(e)}>
                         Edit
                       </Button>
+                      {e.stage > 0 && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleReset(e.id)}
+                          title="Reset to New and make due now"
+                        >
+                          Reset
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="outline"
