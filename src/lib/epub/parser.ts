@@ -300,12 +300,12 @@ export async function parseEpub(buffer: Buffer): Promise<ParsedEpub> {
               filename = existing.filename;
               contentType = existing.contentType;
             } else {
-              filename = claimFilename(sanitized);
               const imgFile = zip.file(resolved);
               if (!imgFile) {
                 // Missing bytes: skip the image row entirely.
                 return;
               }
+              filename = claimFilename(sanitized);
               const u8 = await imgFile.async("uint8array");
               contentType =
                 manifestEntry?.mediaType ||
@@ -327,8 +327,7 @@ export async function parseEpub(buffer: Buffer): Promise<ParsedEpub> {
         }
         // Descend into other elements.
         const kids = $ch(node).contents().toArray();
-        const within = insideParagraph || tag === "p";
-        for (const kid of kids) await walk(kid as Element, within);
+        for (const kid of kids) await walk(kid as Element, insideParagraph);
       };
       for (const kid of $ch(body).contents().toArray()) {
         await walk(kid as Element, false);
