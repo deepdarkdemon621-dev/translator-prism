@@ -14,6 +14,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { translateAllWithGate } from "@/lib/translate/client";
+import { useSelection } from "@/components/library/useSelection";
+import { SelectionBar } from "@/components/library/SelectionBar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface CollectionBook {
   id: string;
@@ -57,6 +65,19 @@ export default function CollectionPage({
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [allCollections, setAllCollections] = useState<Array<{ id: string; name: string }>>([]);
+  const bookSelect = useSelection();
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/collections")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data: Array<{ id: string; name: string }>) => {
+        if (!cancelled) setAllCollections(data ?? []);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const fetchCollection = useCallback(async () => {
     const res = await fetch(`/api/collections/${id}`);
@@ -161,6 +182,51 @@ export default function CollectionPage({
     if (res.ok) router.push("/");
   };
 
+  const handleBulkMoveBooks = async (collectionId: string | null) => {
+    const ids = Array.from(bookSelect.selected);
+    if (ids.length === 0) return;
+    const res = await fetch("/api/books/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "move", ids, collectionId }),
+    });
+    if (!res.ok) {
+      alert(`Move failed: ${await res.text()}`);
+      return;
+    }
+    const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
+    if (data.failed.length > 0) {
+      alert(`${data.succeeded} of ${ids.length} moved. ${data.failed.length} failed.`);
+      bookSelect.remove(ids.filter((id) => !data.failed.some((f) => f.id === id)));
+    } else {
+      bookSelect.exit();
+    }
+    fetchCollection();
+  };
+
+  const handleBulkDeleteBooks = async () => {
+    const ids = Array.from(bookSelect.selected);
+    if (ids.length === 0) return;
+    if (!confirm(`Delete ${ids.length} ${ids.length === 1 ? "book" : "books"}? This can't be undone.`)) return;
+    const res = await fetch("/api/books/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", ids }),
+    });
+    if (!res.ok) {
+      alert(`Delete failed: ${await res.text()}`);
+      return;
+    }
+    const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
+    if (data.failed.length > 0) {
+      alert(`${data.succeeded} of ${ids.length} deleted. ${data.failed.length} failed.`);
+      bookSelect.remove(ids.filter((id) => !data.failed.some((f) => f.id === id)));
+    } else {
+      bookSelect.exit();
+    }
+    fetchCollection();
+  };
+
   if (notFound) return null;
   if (!collection) {
     return (
@@ -219,10 +285,20 @@ export default function CollectionPage({
         )}
       </header>
 
-      <div className="mb-5">
+      <div className="mb-5 flex items-center justify-between">
         <h2 className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
           Books in this series
         </h2>
+        {!readOnly && !bookSelect.mode && collection.books.length > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={bookSelect.enter}
+            className="hidden sm:inline-flex"
+          >
+            Select
+          </Button>
+        )}
       </div>
 
       {collection.books.length === 0 ? (
@@ -236,11 +312,40 @@ export default function CollectionPage({
         </Card>
       ) : (
         <ol className="space-y-3">
-          {collection.books.map((book, i) => (
+          {collection.books.map((book, i) => {
+            const isSel = bookSelect.selected.has(book.id);
+            return (
             <li
               key={book.id}
-              className="flex items-center gap-4 p-3 rounded-xl border border-border/50 hover:border-primary/30 hover:bg-accent/20 transition-all"
+              className={`flex items-center gap-4 p-3 rounded-xl border transition-all ${
+                bookSelect.mode
+                  ? `cursor-pointer ${isSel ? "border-primary ring-2 ring-primary ring-offset-2 bg-accent/30" : "border-border/50 hover:border-primary/30 hover:bg-accent/20"}`
+                  : "border-border/50 hover:border-primary/30 hover:bg-accent/20"
+              }`}
+              onClick={
+                bookSelect.mode
+                  ? (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      bookSelect.toggle(book.id);
+                    }
+                  : undefined
+              }
             >
+              {bookSelect.mode && (
+                <div
+                  className={`h-5 w-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                    isSel ? "bg-primary border-primary text-primary-foreground" : "bg-background/90 border-border/80"
+                  }`}
+                  aria-hidden
+                >
+                  {isSel && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  )}
+                </div>
+              )}
               <div className="text-sm tabular-nums text-muted-foreground w-6 text-center">
                 {i + 1}
               </div>
@@ -261,7 +366,7 @@ export default function CollectionPage({
                   </div>
                 )}
               </div>
-              <div className="flex-1 min-w-0">
+              <div className={`flex-1 min-w-0 ${bookSelect.mode ? "pointer-events-none" : ""}`}>
                 <Link
                   href={`/read/${book.id}`}
                   className="font-medium hover:text-primary transition-colors truncate block"
@@ -273,7 +378,7 @@ export default function CollectionPage({
                   {book.author} · {LANG_LABELS[book.sourceLang] ?? book.sourceLang} · {book.translatedChapters}/{book.totalChapters}
                 </p>
               </div>
-              {!readOnly && (
+              {!readOnly && !bookSelect.mode && (
                 <div className="flex items-center gap-1">
                   <Button
                     variant="ghost"
@@ -327,7 +432,8 @@ export default function CollectionPage({
                 </div>
               )}
             </li>
-          ))}
+            );
+          })}
         </ol>
       )}
 
@@ -354,6 +460,61 @@ export default function CollectionPage({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {bookSelect.mode && (
+        <SelectionBar
+          count={bookSelect.selected.size}
+          total={collection.books.length}
+          noun="book"
+          onSelectAll={() => bookSelect.selectAll(collection.books.map((b) => b.id))}
+          onClear={bookSelect.clear}
+          onDone={bookSelect.exit}
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={bookSelect.selected.size === 0}
+            onClick={() => handleBulkMoveBooks(null)}
+          >
+            Move out
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={bookSelect.selected.size === 0}
+                >
+                  Move to…
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="center">
+              {allCollections.filter((c) => c.id !== id).length === 0 ? (
+                <DropdownMenuItem disabled>No other collections</DropdownMenuItem>
+              ) : (
+                allCollections
+                  .filter((c) => c.id !== id)
+                  .map((c) => (
+                    <DropdownMenuItem key={c.id} onClick={() => handleBulkMoveBooks(c.id)}>
+                      {c.name}
+                    </DropdownMenuItem>
+                  ))
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={bookSelect.selected.size === 0}
+            onClick={handleBulkDeleteBooks}
+            className="text-destructive hover:bg-destructive/10 hover:border-destructive/40"
+          >
+            Delete
+          </Button>
+        </SelectionBar>
+      )}
     </div>
   );
 }
