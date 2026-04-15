@@ -115,11 +115,81 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // Imports are showcase content by definition — admin curates, everyone
-  // reads. The admin can flip visibility later if needed.
-  await db
-    .insert(books)
-    .values({
+  // Build flat row arrays up-front so the whole import is a single
+  // transaction with batched .values([...]) inserts. Turso bills per
+  // write request — a large novel can have thousands of paragraphs plus
+  // translations, so collapsing to ceil(rows/500) writes per table is
+  // a big win. Imports are showcase content by definition — admin
+  // curates, everyone reads. The admin can flip visibility later.
+  const chapterRows: {
+    id: string;
+    bookId: string;
+    index: number;
+    title: string;
+    sourceHtml: string;
+    status: "pending" | "translating" | "done" | "error";
+  }[] = [];
+  const paragraphRows: {
+    id: string;
+    chapterId: string;
+    seq: number;
+    sourceText: string;
+    sourceMarkup: string;
+  }[] = [];
+  const translationRows: {
+    id: string;
+    paragraphId: string;
+    lang: string;
+    text: string;
+    status: "pending" | "processing" | "done" | "failed";
+    model: string | null;
+    tokensUsed: number | null;
+  }[] = [];
+
+  for (const ch of payload.chapters) {
+    if (typeof ch.index !== "number" || typeof ch.title !== "string") continue;
+    const chapterId = randomUUID();
+    chapterRows.push({
+      id: chapterId,
+      bookId,
+      index: ch.index,
+      title: ch.title,
+      sourceHtml: ch.sourceHtml || "",
+      status: (["pending", "translating", "done", "error"].includes(ch.status)
+        ? ch.status
+        : "pending") as "pending" | "translating" | "done" | "error",
+    });
+
+    for (const p of ch.paragraphs ?? []) {
+      if (typeof p.seq !== "number" || typeof p.sourceText !== "string") continue;
+      const paragraphId = randomUUID();
+      paragraphRows.push({
+        id: paragraphId,
+        chapterId,
+        seq: p.seq,
+        sourceText: p.sourceText,
+        sourceMarkup: p.sourceMarkup || "",
+      });
+
+      for (const t of p.translations ?? []) {
+        if (!t.lang) continue;
+        translationRows.push({
+          id: randomUUID(),
+          paragraphId,
+          lang: t.lang,
+          text: t.text ?? "",
+          status: (["pending", "processing", "done", "failed"].includes(t.status)
+            ? t.status
+            : "done") as "pending" | "processing" | "done" | "failed",
+          model: t.model ?? null,
+          tokensUsed: t.tokensUsed ?? null,
+        });
+      }
+    }
+  }
+
+  await db.transaction(async (tx) => {
+    await tx.insert(books).values({
       id: bookId,
       title: payload.book.title,
       author: payload.book.author || "Unknown",
@@ -133,68 +203,22 @@ export async function POST(request: NextRequest) {
       status: "parsed",
       userId: user.id,
       visibility: "public",
-    })
-    .run();
+    });
 
-  let chapterCount = 0;
-  let paragraphCount = 0;
-  let translationCount = 0;
-
-  for (const ch of payload.chapters) {
-    if (typeof ch.index !== "number" || typeof ch.title !== "string") continue;
-    const chapterId = randomUUID();
-    await db
-      .insert(chapters)
-      .values({
-        id: chapterId,
-        bookId,
-        index: ch.index,
-        title: ch.title,
-        sourceHtml: ch.sourceHtml || "",
-        status: ["pending", "translating", "done", "error"].includes(ch.status)
-          ? ch.status
-          : "pending",
-      })
-      .run();
-    chapterCount++;
-
-    for (const p of ch.paragraphs ?? []) {
-      if (typeof p.seq !== "number" || typeof p.sourceText !== "string") continue;
-      const paragraphId = randomUUID();
-      await db
-        .insert(paragraphs)
-        .values({
-          id: paragraphId,
-          chapterId,
-          seq: p.seq,
-          sourceText: p.sourceText,
-          sourceMarkup: p.sourceMarkup || "",
-        })
-        .run();
-      paragraphCount++;
-
-      for (const t of p.translations ?? []) {
-        if (!t.lang) continue;
-        await db
-          .insert(translations)
-          .values({
-            id: randomUUID(),
-            paragraphId,
-            lang: t.lang,
-            text: t.text ?? "",
-            status: ["pending", "processing", "done", "failed"].includes(
-              t.status,
-            )
-              ? t.status
-              : "done",
-            model: t.model ?? null,
-            tokensUsed: t.tokensUsed ?? null,
-          })
-          .run();
-        translationCount++;
-      }
+    for (let i = 0; i < chapterRows.length; i += 500) {
+      await tx.insert(chapters).values(chapterRows.slice(i, i + 500));
     }
-  }
+    for (let i = 0; i < paragraphRows.length; i += 500) {
+      await tx.insert(paragraphs).values(paragraphRows.slice(i, i + 500));
+    }
+    for (let i = 0; i < translationRows.length; i += 500) {
+      await tx.insert(translations).values(translationRows.slice(i, i + 500));
+    }
+  });
+
+  const chapterCount = chapterRows.length;
+  const paragraphCount = paragraphRows.length;
+  const translationCount = translationRows.length;
 
   return NextResponse.json({
     id: bookId,

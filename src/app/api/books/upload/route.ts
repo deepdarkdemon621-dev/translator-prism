@@ -95,11 +95,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Insert book. Visibility comes from the form: admin can pick
-    // public/private (default public); regular users are always private.
-    await db
-      .insert(books)
-      .values({
+    // Insert book + chapters + first-chapter paragraphs in a single
+    // transaction with batched .values([...]) arrays. Turso bills per
+    // write request, so collapsing N+1 roundtrips into ceil(N/500) is a
+    // big deal for large EPUBs. Visibility comes from the form: admin
+    // can pick public/private (default public); regular users are
+    // always private.
+    await db.transaction(async (tx) => {
+      await tx.insert(books).values({
         id: bookId,
         title: parsed.title,
         author: parsed.author,
@@ -112,42 +115,36 @@ export async function POST(request: NextRequest) {
         visibility,
         collectionId: targetCollectionId,
         collectionSeq: targetCollectionSeq,
-      })
-      .run();
+      });
 
-    // Insert all chapters and first chapter's paragraphs
-    for (let i = 0; i < parsed.chapters.length; i++) {
-      const ch = parsed.chapters[i];
-      const chapterId = randomUUID();
-
-      await db
-        .insert(chapters)
-        .values({
-          id: chapterId,
-          bookId,
-          index: i,
-          title: ch.title,
-          sourceHtml: ch.sourceHtml,
-          status: "pending",
-        })
-        .run();
-
-      // Only parse paragraphs for first chapter immediately
-      if (i === 0) {
-        for (let j = 0; j < ch.paragraphs.length; j++) {
-          await db
-            .insert(paragraphs)
-            .values({
-              id: randomUUID(),
-              chapterId,
-              seq: j,
-              sourceText: ch.paragraphs[j].text,
-              sourceMarkup: ch.paragraphs[j].markup,
-            })
-            .run();
+      const chapterRows = parsed.chapters.map((ch, i) => ({
+        id: randomUUID(),
+        bookId,
+        index: i,
+        title: ch.title,
+        sourceHtml: ch.sourceHtml,
+        status: "pending" as const,
+      }));
+      if (chapterRows.length > 0) {
+        for (let i = 0; i < chapterRows.length; i += 500) {
+          await tx.insert(chapters).values(chapterRows.slice(i, i + 500));
         }
       }
-    }
+
+      const firstChapterId = chapterRows[0]?.id;
+      if (firstChapterId && parsed.chapters[0]) {
+        const paragraphRows = parsed.chapters[0].paragraphs.map((p, j) => ({
+          id: randomUUID(),
+          chapterId: firstChapterId,
+          seq: j,
+          sourceText: p.text,
+          sourceMarkup: p.markup,
+        }));
+        for (let i = 0; i < paragraphRows.length; i += 500) {
+          await tx.insert(paragraphs).values(paragraphRows.slice(i, i + 500));
+        }
+      }
+    });
 
     return NextResponse.json({
       id: bookId,
