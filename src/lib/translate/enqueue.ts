@@ -39,16 +39,41 @@ export async function enqueueChapterTranslations(
       return { queued: 0, skippedDone: 0, totalParagraphs: 0, queuedChars: 0 };
     }
 
-    const $ = await import("cheerio").then((m) =>
-      m.load(chapter.sourceHtml, { xmlMode: true }),
-    );
-    const extracted: { text: string; markup: string }[] = [];
-    $("body p, p").each((_, el) => {
-      const text = $(el).text().trim();
-      if (text.length === 0) return;
-      const markup = $.html(el) || "";
-      extracted.push({ text, markup });
-    });
+    const cheerio = await import("cheerio");
+    const $ = cheerio.load(chapter.sourceHtml, { xmlMode: true });
+    const extracted: { text: string; markup: string; kind: "text" | "image" }[] = [];
+
+    const body = $("body").get(0);
+    if (body) {
+      const walk = (node: import("domhandler").Element, insideParagraph: boolean): void => {
+        if (node.type !== "tag") return;
+        const tag = node.tagName?.toLowerCase();
+        if (tag === "p") {
+          const text = $(node).text().trim();
+          if (text.length > 0) {
+            const markup = $.html(node) || "";
+            extracted.push({ text, markup, kind: "text" });
+          }
+          return;
+        }
+        if (tag === "img" && !insideParagraph) {
+          const src = $(node).attr("src");
+          if (!src) return;
+          const alt = ($(node).attr("alt") || "").trim();
+          // sourceHtml already has rewritten absolute src; reuse the node
+          // markup verbatim via $.html.
+          const markup = $.html(node) || `<img src="${src}" alt="${alt}">`;
+          extracted.push({ text: alt, markup, kind: "image" });
+          return;
+        }
+        for (const kid of $(node).contents().toArray()) {
+          walk(kid as import("domhandler").Element, insideParagraph || tag === "p");
+        }
+      };
+      for (const kid of $(body).contents().toArray()) {
+        walk(kid as import("domhandler").Element, false);
+      }
+    }
 
     if (extracted.length > 0) {
       await db.transaction(async (tx) => {
@@ -58,6 +83,7 @@ export async function enqueueChapterTranslations(
           seq: j,
           sourceText: e.text,
           sourceMarkup: e.markup,
+          kind: e.kind,
         }));
         for (let i = 0; i < rows.length; i += 500) {
           await tx.insert(paragraphs).values(rows.slice(i, i + 500));
