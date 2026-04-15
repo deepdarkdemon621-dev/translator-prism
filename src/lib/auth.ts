@@ -68,7 +68,7 @@ export async function getCurrentUser(): Promise<SessionUser> {
   const shouldBeAdmin = emailLower.length > 0 && admins.has(emailLower);
 
   // Fast path: we've seen this clerk user before.
-  let row = db
+  let row = await db
     .select()
     .from(users)
     .where(eq(users.clerkUserId, clerkId))
@@ -78,14 +78,15 @@ export async function getCurrentUser(): Promise<SessionUser> {
     // First sign-in. If this user qualifies for admin and the seed-admin
     // row is still unclaimed, hijack it so their existing library stays
     // attached. Otherwise mint a fresh row.
-    const seed = db
+    const seed = await db
       .select()
       .from(users)
       .where(eq(users.id, SEED_ADMIN_ID))
       .get();
 
     if (shouldBeAdmin && seed && !seed.clerkUserId) {
-      db.update(users)
+      await db
+        .update(users)
         .set({
           clerkUserId: clerkId,
           email: primaryEmail,
@@ -95,10 +96,15 @@ export async function getCurrentUser(): Promise<SessionUser> {
         })
         .where(eq(users.id, SEED_ADMIN_ID))
         .run();
-      row = db.select().from(users).where(eq(users.id, SEED_ADMIN_ID)).get()!;
+      row = (await db
+        .select()
+        .from(users)
+        .where(eq(users.id, SEED_ADMIN_ID))
+        .get())!;
     } else {
       const id = randomUUID();
-      db.insert(users)
+      await db
+        .insert(users)
         .values({
           id,
           clerkUserId: clerkId,
@@ -108,7 +114,7 @@ export async function getCurrentUser(): Promise<SessionUser> {
           credits: 0,
         })
         .run();
-      row = db.select().from(users).where(eq(users.id, id)).get()!;
+      row = (await db.select().from(users).where(eq(users.id, id)).get())!;
     }
   } else {
     // Existing user: keep email / displayName / admin flag fresh. We
@@ -119,7 +125,8 @@ export async function getCurrentUser(): Promise<SessionUser> {
     const nameChanged = row.displayName !== displayName;
     const adminChanged = row.isAdmin !== wantAdmin;
     if (emailChanged || nameChanged || adminChanged) {
-      db.update(users)
+      await db
+        .update(users)
         .set({
           email: primaryEmail,
           displayName,
@@ -128,7 +135,7 @@ export async function getCurrentUser(): Promise<SessionUser> {
         })
         .where(eq(users.id, row.id))
         .run();
-      row = db.select().from(users).where(eq(users.id, row.id)).get()!;
+      row = (await db.select().from(users).where(eq(users.id, row.id)).get())!;
     }
   }
 

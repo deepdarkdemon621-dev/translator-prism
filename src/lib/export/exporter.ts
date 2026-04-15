@@ -20,31 +20,28 @@ const LANG_LABELS: Record<string, string> = {
 
 export async function exportJson(bookId: string): Promise<string> {
   const db = getDb();
-  const book = db.select().from(books).where(eq(books.id, bookId)).get();
+  const book = await db.select().from(books).where(eq(books.id, bookId)).get();
   if (!book) throw new Error("Book not found");
 
-  const chapterList = db
+  const chapterList = await db
     .select()
     .from(chapters)
     .where(eq(chapters.bookId, bookId))
     .orderBy(chapters.index)
     .all();
 
-  const data = {
-    book: { title: book.title, author: book.author, sourceLang: book.sourceLang },
-    chapters: chapterList.map((ch) => {
-      const paras = db
+  const chaptersData = await Promise.all(
+    chapterList.map(async (ch) => {
+      const paras = await db
         .select()
         .from(paragraphs)
         .where(eq(paragraphs.chapterId, ch.id))
         .orderBy(paragraphs.seq)
         .all();
 
-      return {
-        index: ch.index,
-        title: ch.title,
-        paragraphs: paras.map((p) => {
-          const trans = db
+      const paraData = await Promise.all(
+        paras.map(async (p) => {
+          const trans = await db
             .select()
             .from(translations)
             .where(eq(translations.paragraphId, p.id))
@@ -53,11 +50,30 @@ export async function exportJson(bookId: string): Promise<string> {
           return {
             seq: p.seq,
             source: p.sourceText,
-            translations: Object.fromEntries(trans.filter((t) => t.status === "done").map((t) => [t.lang, t.text])),
+            translations: Object.fromEntries(
+              trans
+                .filter((t) => t.status === "done")
+                .map((t) => [t.lang, t.text]),
+            ),
           };
         }),
+      );
+
+      return {
+        index: ch.index,
+        title: ch.title,
+        paragraphs: paraData,
       };
     }),
+  );
+
+  const data = {
+    book: {
+      title: book.title,
+      author: book.author,
+      sourceLang: book.sourceLang,
+    },
+    chapters: chaptersData,
   };
 
   const fileName = `${bookId}.json`;
@@ -67,7 +83,7 @@ export async function exportJson(bookId: string): Promise<string> {
 
 export async function exportHtmlZip(bookId: string): Promise<string> {
   const db = getDb();
-  const book = db.select().from(books).where(eq(books.id, bookId)).get();
+  const book = await db.select().from(books).where(eq(books.id, bookId)).get();
   if (!book) throw new Error("Book not found");
 
   const fileName = `${bookId}.zip`;
@@ -88,7 +104,7 @@ export async function exportHtmlZip(bookId: string): Promise<string> {
 
   archive.pipe(output);
 
-  const chapterList = db
+  const chapterList = await db
     .select()
     .from(chapters)
     .where(eq(chapters.bookId, bookId))
@@ -121,12 +137,21 @@ h1{text-align:center;color:#e94560;}h2{color:#ccc;}`,
     indexHtml += `<li><a href="${chFileName}">${escapeHtml(ch.title)}</a></li>`;
 
     // Chapter page
-    const paras = db.select().from(paragraphs).where(eq(paragraphs.chapterId, ch.id)).orderBy(paragraphs.seq).all();
+    const paras = await db
+      .select()
+      .from(paragraphs)
+      .where(eq(paragraphs.chapterId, ch.id))
+      .orderBy(paragraphs.seq)
+      .all();
 
     // Prefetch all translations per paragraph once per chapter
     const paraTranslations = new Map<string, TransRow[]>();
     for (const p of paras) {
-      const trans = db.select().from(translations).where(eq(translations.paragraphId, p.id)).all();
+      const trans = await db
+        .select()
+        .from(translations)
+        .where(eq(translations.paragraphId, p.id))
+        .all();
       paraTranslations.set(p.id, trans);
     }
 

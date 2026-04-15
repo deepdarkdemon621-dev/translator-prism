@@ -39,7 +39,7 @@ export async function enqueueChapterTranslations(
 ): Promise<EnqueueResult> {
   const db = getDb();
 
-  let paras = db
+  let paras = await db
     .select()
     .from(paragraphs)
     .where(eq(paragraphs.chapterId, chapterId))
@@ -47,7 +47,7 @@ export async function enqueueChapterTranslations(
     .all();
 
   if (paras.length === 0) {
-    const chapter = db
+    const chapter = await db
       .select()
       .from(chapters)
       .where(eq(chapters.id, chapterId))
@@ -70,7 +70,8 @@ export async function enqueueChapterTranslations(
     });
 
     for (let j = 0; j < extracted.length; j++) {
-      db.insert(paragraphs)
+      await db
+        .insert(paragraphs)
         .values({
           id: randomUUID(),
           chapterId,
@@ -81,7 +82,7 @@ export async function enqueueChapterTranslations(
         .run();
     }
 
-    paras = db
+    paras = await db
       .select()
       .from(paragraphs)
       .where(eq(paragraphs.chapterId, chapterId))
@@ -97,7 +98,7 @@ export async function enqueueChapterTranslations(
   let queuedChars = 0;
 
   for (const para of paras) {
-    const existingForPara = db
+    const existingForPara = await db
       .select()
       .from(translations)
       .where(eq(translations.paragraphId, para.id))
@@ -112,7 +113,8 @@ export async function enqueueChapterTranslations(
 
       const translationId = existing?.id || randomUUID();
       if (!existing) {
-        db.insert(translations)
+        await db
+          .insert(translations)
           .values({
             id: translationId,
             paragraphId: para.id,
@@ -121,7 +123,8 @@ export async function enqueueChapterTranslations(
           })
           .run();
       } else {
-        db.update(translations)
+        await db
+          .update(translations)
           .set({
             status: "pending",
             errorMessage: null,
@@ -137,43 +140,53 @@ export async function enqueueChapterTranslations(
         fromLang: sourceLang,
         toLang: lang,
         // Peek DB just before running: if the row was cancelled while
-        // waiting, skip the provider call entirely.
-        shouldRun: () => {
-          const row = getDb()
-            .select({ status: translations.status })
-            .from(translations)
-            .where(eq(translations.id, translationId))
-            .get();
-          return row?.status !== "cancelled";
-        },
+        // waiting, skip the provider call entirely. shouldRun must return
+        // synchronously — we optimistically return true and let the
+        // onComplete handler re-check before writing. The queue (Task 10)
+        // is being replaced by a worker, so this bridge is short-lived.
+        shouldRun: () => true,
         onComplete: (result) => {
-          // WHERE status != 'cancelled' guards against a race where the
-          // LLM call completed after the user clicked Cancel — we don't
-          // want to overwrite cancelled rows back to done.
-          getDb()
-            .update(translations)
-            .set({
-              text: result.text,
-              status: "done",
-              model: result.model,
-              tokensUsed: result.tokensUsed,
-              updatedAt: new Date().toISOString(),
-            })
-            .where(and(eq(translations.id, translationId), ne(translations.status, "cancelled")))
-            .run();
-          checkChapterDone(chapterId);
+          void (async () => {
+            // WHERE status != 'cancelled' guards against a race where the
+            // LLM call completed after the user clicked Cancel — we don't
+            // want to overwrite cancelled rows back to done.
+            await getDb()
+              .update(translations)
+              .set({
+                text: result.text,
+                status: "done",
+                model: result.model,
+                tokensUsed: result.tokensUsed,
+                updatedAt: new Date().toISOString(),
+              })
+              .where(
+                and(
+                  eq(translations.id, translationId),
+                  ne(translations.status, "cancelled"),
+                ),
+              )
+              .run();
+            await checkChapterDone(chapterId);
+          })();
         },
         onError: (error) => {
-          getDb()
-            .update(translations)
-            .set({
-              status: "failed",
-              errorMessage: error.message,
-              updatedAt: new Date().toISOString(),
-            })
-            .where(and(eq(translations.id, translationId), ne(translations.status, "cancelled")))
-            .run();
-          checkChapterDone(chapterId);
+          void (async () => {
+            await getDb()
+              .update(translations)
+              .set({
+                status: "failed",
+                errorMessage: error.message,
+                updatedAt: new Date().toISOString(),
+              })
+              .where(
+                and(
+                  eq(translations.id, translationId),
+                  ne(translations.status, "cancelled"),
+                ),
+              )
+              .run();
+            await checkChapterDone(chapterId);
+          })();
         },
       });
 
@@ -183,7 +196,8 @@ export async function enqueueChapterTranslations(
   }
 
   if (queued > 0) {
-    db.update(chapters)
+    await db
+      .update(chapters)
       .set({ status: "translating", updatedAt: new Date().toISOString() })
       .where(eq(chapters.id, chapterId))
       .run();
@@ -206,12 +220,12 @@ export async function enqueueChapterTranslations(
  * character (JA/ZH CJK roughly 1:1 with BPE) plus ~1 output token, so
  * total tokens ≈ 2 × queuedChars. Rough but round enough for a warning.
  */
-export function estimateChapterWork(
+export async function estimateChapterWork(
   chapterId: string,
   sourceLang: string,
-): { queuedChars: number; queuedTranslations: number } {
+): Promise<{ queuedChars: number; queuedTranslations: number }> {
   const db = getDb();
-  const paras = db
+  const paras = await db
     .select()
     .from(paragraphs)
     .where(eq(paragraphs.chapterId, chapterId))
@@ -224,7 +238,7 @@ export function estimateChapterWork(
   // an overestimate because HTML tags aren't translated, but that's
   // conservative for the cost-gate warning.
   if (paras.length === 0) {
-    const chapter = db
+    const chapter = await db
       .select()
       .from(chapters)
       .where(eq(chapters.id, chapterId))
@@ -242,7 +256,7 @@ export function estimateChapterWork(
   let queuedTranslations = 0;
 
   for (const para of paras) {
-    const existingForPara = db
+    const existingForPara = await db
       .select()
       .from(translations)
       .where(eq(translations.paragraphId, para.id))

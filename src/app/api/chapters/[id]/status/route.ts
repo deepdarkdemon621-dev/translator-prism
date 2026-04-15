@@ -16,20 +16,20 @@ export async function GET(
     return NextResponse.json({ error: "Chapter not found" }, { status: 404 });
   }
 
-  const totalParas = db
+  const totalParas = await db
     .select({ count: count() })
     .from(paragraphs)
     .where(eq(paragraphs.chapterId, id))
     .get();
 
-  const doneTranslations = db
+  const doneTranslations = await db
     .select({ count: count() })
     .from(translations)
     .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))
     .where(and(eq(paragraphs.chapterId, id), eq(translations.status, "done")))
     .get();
 
-  const failedTranslations = db
+  const failedTranslations = await db
     .select({ count: count() })
     .from(translations)
     .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))

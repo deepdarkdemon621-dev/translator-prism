@@ -35,7 +35,7 @@ export async function GET(
   }
 
   const db = getDb();
-  const chRows = db
+  const chRows = await db
     .select()
     .from(chapters)
     .where(eq(chapters.bookId, id))
@@ -44,7 +44,7 @@ export async function GET(
 
   const chapterIds = chRows.map((c) => c.id);
   const paraRows = chapterIds.length
-    ? db
+    ? await db
         .select()
         .from(paragraphs)
         .where(inArray(paragraphs.chapterId, chapterIds))
@@ -53,7 +53,7 @@ export async function GET(
     : [];
   const paraIds = paraRows.map((p) => p.id);
   const transRows = paraIds.length
-    ? db
+    ? await db
         .select()
         .from(translations)
         .where(inArray(translations.paragraphId, paraIds))

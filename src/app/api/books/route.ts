@@ -24,12 +24,13 @@ export async function GET(request: NextRequest) {
   if (user.isAdmin) {
     whereClause = undefined;
   } else {
-    const adminIds = db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.isAdmin, 1))
-      .all()
-      .map((u) => u.id);
+    const adminIds = (
+      await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.isAdmin, 1))
+        .all()
+    ).map((u) => u.id);
     const adminPublic = adminIds.length
       ? and(eq(books.visibility, "public"), inArray(books.userId, adminIds))
       : undefined;
@@ -61,48 +62,53 @@ export async function GET(request: NextRequest) {
         : isNull(books.collectionId)
       : whereClause;
 
-  const allBooks = (finalWhere ? query.where(finalWhere) : query)
+  const allBooks = await (finalWhere ? query.where(finalWhere) : query)
     .orderBy(desc(books.createdAt))
     .all();
 
   // Count "done" chapters + pending/processing translations per book. The
   // pending count drives the Cancel button in the UI — it's non-zero
   // exactly when there is work the user could abort.
-  const booksWithProgress = allBooks.map((book) => {
-    const doneChapters = db
-      .select({ count: count() })
-      .from(chapters)
-      .where(and(eq(chapters.bookId, book.id), eq(chapters.status, "done")))
-      .all();
+  const booksWithProgress = await Promise.all(
+    allBooks.map(async (book) => {
+      const doneChapters = await db
+        .select({ count: count() })
+        .from(chapters)
+        .where(and(eq(chapters.bookId, book.id), eq(chapters.status, "done")))
+        .all();
 
-    // Sub-select: paragraphs in this book → translations still in flight.
-    const paraIds = db
-      .select({ id: paragraphs.id })
-      .from(paragraphs)
-      .innerJoin(chapters, eq(chapters.id, paragraphs.chapterId))
-      .where(eq(chapters.bookId, book.id))
-      .all()
-      .map((p) => p.id);
+      // Sub-select: paragraphs in this book → translations still in flight.
+      const paraIds = (
+        await db
+          .select({ id: paragraphs.id })
+          .from(paragraphs)
+          .innerJoin(chapters, eq(chapters.id, paragraphs.chapterId))
+          .where(eq(chapters.bookId, book.id))
+          .all()
+      ).map((p) => p.id);
 
-    const pendingCount = paraIds.length
-      ? db
-          .select({ count: count() })
-          .from(translations)
-          .where(
-            and(
-              inArray(translations.paragraphId, paraIds),
-              inArray(translations.status, ["pending", "processing"]),
-            ),
-          )
-          .all()[0]?.count || 0
-      : 0;
+      const pendingCount = paraIds.length
+        ? (
+            await db
+              .select({ count: count() })
+              .from(translations)
+              .where(
+                and(
+                  inArray(translations.paragraphId, paraIds),
+                  inArray(translations.status, ["pending", "processing"]),
+                ),
+              )
+              .all()
+          )[0]?.count || 0
+        : 0;
 
-    return {
-      ...book,
-      translatedChapters: doneChapters[0]?.count || 0,
-      pendingTranslations: pendingCount,
-    };
-  });
+      return {
+        ...book,
+        translatedChapters: doneChapters[0]?.count || 0,
+        pendingTranslations: pendingCount,
+      };
+    }),
+  );
 
   return NextResponse.json(booksWithProgress);
 }

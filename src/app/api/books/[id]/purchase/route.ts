@@ -51,13 +51,13 @@ export async function POST(
     );
   }
 
-  const quote = quoteBundle(user, id, bundle);
+  const quote = await quoteBundle(user, id, bundle);
   if (quote.chapterIds.length === 0) {
     return NextResponse.json({ error: "Book has no chapters" }, { status: 400 });
   }
 
   try {
-    const result = purchaseChapters(user, quote.chapterIds, {
+    const result = await purchaseChapters(user, quote.chapterIds, {
       discountPct: BUNDLE_TIERS[bundle].discountPct,
     });
     return NextResponse.json({ bundle, ...result });

@@ -17,7 +17,7 @@ export async function GET(
     return NextResponse.json({ error: "Book not found" }, { status: 404 });
   }
 
-  const chapterList = db
+  const chapterList = await db
     .select({
       id: chapters.id,
       index: chapters.index,
@@ -56,7 +56,7 @@ export async function DELETE(
   }
 
   // Cascade delete handles chapters, paragraphs, translations
-  db.delete(books).where(eq(books.id, id)).run();
+  await db.delete(books).where(eq(books.id, id)).run();
 
   return NextResponse.json({ success: true });
 }

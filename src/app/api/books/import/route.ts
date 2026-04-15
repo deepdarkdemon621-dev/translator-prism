@@ -117,7 +117,8 @@ export async function POST(request: NextRequest) {
 
   // Imports are showcase content by definition — admin curates, everyone
   // reads. The admin can flip visibility later if needed.
-  db.insert(books)
+  await db
+    .insert(books)
     .values({
       id: bookId,
       title: payload.book.title,
@@ -142,7 +143,8 @@ export async function POST(request: NextRequest) {
   for (const ch of payload.chapters) {
     if (typeof ch.index !== "number" || typeof ch.title !== "string") continue;
     const chapterId = randomUUID();
-    db.insert(chapters)
+    await db
+      .insert(chapters)
       .values({
         id: chapterId,
         bookId,
@@ -159,7 +161,8 @@ export async function POST(request: NextRequest) {
     for (const p of ch.paragraphs ?? []) {
       if (typeof p.seq !== "number" || typeof p.sourceText !== "string") continue;
       const paragraphId = randomUUID();
-      db.insert(paragraphs)
+      await db
+        .insert(paragraphs)
         .values({
           id: paragraphId,
           chapterId,
@@ -172,7 +175,8 @@ export async function POST(request: NextRequest) {
 
       for (const t of p.translations ?? []) {
         if (!t.lang) continue;
-        db.insert(translations)
+        await db
+          .insert(translations)
           .values({
             id: randomUUID(),
             paragraphId,

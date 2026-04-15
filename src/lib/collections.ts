@@ -21,12 +21,12 @@ interface Actor {
  * `row.userId === actor.id` after loading (admin still can't mutate
  * another user's collection; the backdoor is view-only).
  */
-export function loadCollectionForView(
+export async function loadCollectionForView(
   collectionId: string,
   actor: Actor,
-): typeof collections.$inferSelect | null {
+): Promise<typeof collections.$inferSelect | null> {
   const db = getDb();
-  const row = db
+  const row = await db
     .select()
     .from(collections)
     .where(eq(collections.id, collectionId))
@@ -43,12 +43,12 @@ export function loadCollectionForView(
  * admin's backdoor is strictly view-only, so a foreign row returns null
  * even for admin. Mirrors the old loadOwnedCollection signature.
  */
-export function loadOwnedCollection(
+export async function loadOwnedCollection(
   collectionId: string,
   actor: Actor,
-): typeof collections.$inferSelect | null {
+): Promise<typeof collections.$inferSelect | null> {
   const db = getDb();
-  const row = db
+  const row = await db
     .select()
     .from(collections)
     .where(
@@ -73,16 +73,16 @@ export function loadOwnedCollection(
  * moving into a collection (appended to tail — preserves the current
  * cover).
  */
-export function moveBookToCollection(params: {
+export async function moveBookToCollection(params: {
   bookId: string;
   targetCollectionId: string | null;
   actingUserId: string;
   actingIsAdmin: boolean;
-}): void {
+}): Promise<void> {
   const { bookId, targetCollectionId, actingUserId } = params;
   const db = getDb();
 
-  const book = db
+  const book = await db
     .select({ userId: books.userId })
     .from(books)
     .where(eq(books.id, bookId))
@@ -94,7 +94,7 @@ export function moveBookToCollection(params: {
 
   let nextSeq: number | null = null;
   if (targetCollectionId !== null) {
-    const target = db
+    const target = await db
       .select({ userId: collections.userId })
       .from(collections)
       .where(eq(collections.id, targetCollectionId))
@@ -104,7 +104,7 @@ export function moveBookToCollection(params: {
       throw new Error("collection not owned by caller");
     }
     // Append to tail: max(collection_seq) + 1 within the target collection.
-    const maxRow = db
+    const maxRow = await db
       .select({ s: books.collectionSeq })
       .from(books)
       .where(eq(books.collectionId, targetCollectionId))
@@ -116,7 +116,8 @@ export function moveBookToCollection(params: {
     nextSeq = maxSeq + 1;
   }
 
-  db.update(books)
+  await db
+    .update(books)
     .set({
       collectionId: targetCollectionId,
       collectionSeq: nextSeq,
@@ -130,7 +131,8 @@ export function moveBookToCollection(params: {
   // if needed later, a move helper could read the old collection_id
   // first and touch both.
   if (targetCollectionId) {
-    db.update(collections)
+    await db
+      .update(collections)
       .set({ updatedAt: new Date().toISOString() })
       .where(eq(collections.id, targetCollectionId))
       .run();

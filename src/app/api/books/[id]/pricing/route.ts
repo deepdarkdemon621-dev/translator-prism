@@ -18,16 +18,18 @@ export async function GET(
     return NextResponse.json({ error: "Book not found" }, { status: 404 });
   }
 
-  const tiers = (Object.keys(BUNDLE_TIERS) as BundleKey[]).map((key) => {
-    const tier = BUNDLE_TIERS[key];
-    const q = quoteBundle(user, id, key);
-    return {
-      bundle: key,
-      chapterLimit: tier.chapters,
-      discountPct: tier.discountPct,
-      ...q,
-    };
-  });
+  const tiers = await Promise.all(
+    (Object.keys(BUNDLE_TIERS) as BundleKey[]).map(async (key) => {
+      const tier = BUNDLE_TIERS[key];
+      const q = await quoteBundle(user, id, key);
+      return {
+        bundle: key,
+        chapterLimit: tier.chapters,
+        discountPct: tier.discountPct,
+        ...q,
+      };
+    }),
+  );
 
   return NextResponse.json({
     bookId: id,

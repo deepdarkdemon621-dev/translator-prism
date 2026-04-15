@@ -1,4 +1,4 @@
-import { getSqlite } from "@/lib/db";
+import { getLibsqlClient } from "@/lib/db";
 import { getBaseForms } from "./kuromoji";
 
 export interface DictLookupResult {
@@ -9,13 +9,6 @@ export interface DictLookupResult {
   // visually distinct (e.g. labelling a CEDICT hit as ZH pinyin when the
   // user was looking up a Japanese word with shared kanji).
   sourceLang: string;
-  headword: string;
-  reading: string;
-  gloss: string;
-}
-
-interface DictRow {
-  dictionary_id: string;
   headword: string;
   reading: string;
   gloss: string;
@@ -63,7 +56,7 @@ export async function lookupWord(params: {
     candidates = [rawQuery.toLowerCase()];
   }
 
-  const sqlite = getSqlite();
+  const client = getLibsqlClient();
 
   // Primary lookup: dictionaries whose source_lang matches the query lang.
   // Cross-lookup: if the query contains CJK kanji/hanzi, also query the
@@ -73,16 +66,28 @@ export async function lookupWord(params: {
   const isCjkQuery = hasCjkKanji(rawQuery);
   const crossLang = lang === "ja" ? "zh" : lang === "zh" ? "ja" : null;
 
-  const primaryDicts = sqlite
-    .prepare("SELECT id, name, source_lang FROM dictionaries WHERE source_lang = ?")
-    .all(lang) as Array<{ id: string; name: string; source_lang: string }>;
+  const primaryDictsRes = await client.execute({
+    sql: "SELECT id, name, source_lang FROM dictionaries WHERE source_lang = ?",
+    args: [lang],
+  });
+  const primaryDicts = primaryDictsRes.rows.map((r) => ({
+    id: r.id as string,
+    name: r.name as string,
+    source_lang: r.source_lang as string,
+  }));
 
-  const crossDicts =
-    isCjkQuery && crossLang
-      ? (sqlite
-          .prepare("SELECT id, name, source_lang FROM dictionaries WHERE source_lang = ?")
-          .all(crossLang) as Array<{ id: string; name: string; source_lang: string }>)
-      : [];
+  let crossDicts: Array<{ id: string; name: string; source_lang: string }> = [];
+  if (isCjkQuery && crossLang) {
+    const crossRes = await client.execute({
+      sql: "SELECT id, name, source_lang FROM dictionaries WHERE source_lang = ?",
+      args: [crossLang],
+    });
+    crossDicts = crossRes.rows.map((r) => ({
+      id: r.id as string,
+      name: r.name as string,
+      source_lang: r.source_lang as string,
+    }));
+  }
 
   const dictRows = [...primaryDicts, ...crossDicts];
   if (dictRows.length === 0) return [];
@@ -93,11 +98,9 @@ export async function lookupWord(params: {
   );
 
   const placeholders = dictIds.map(() => "?").join(",");
-  const selectStmt = sqlite.prepare(
-    `SELECT dictionary_id, headword, reading, gloss
+  const selectSql = `SELECT dictionary_id, headword, reading, gloss
        FROM dict_entries
-      WHERE dictionary_id IN (${placeholders}) AND headword = ?`,
-  );
+      WHERE dictionary_id IN (${placeholders}) AND headword = ?`;
 
   // Dedup on (dictionary_id, headword, gloss) so variant candidates don't
   // produce duplicate rows when they both resolve to the same entry.
@@ -111,33 +114,48 @@ export async function lookupWord(params: {
   const primaryCandidates = candidates;
   const crossCandidates = isCjkQuery && crossLang ? [rawQuery] : [];
 
-  const runLookup = (
+  const runLookup = async (
     candidateList: string[],
     dictIdSet: Set<string>,
     bucket: DictLookupResult[],
   ) => {
     for (const candidate of candidateList) {
-      const rows = selectStmt.all(...dictIds, candidate) as DictRow[];
-      for (const row of rows) {
-        if (!dictIdSet.has(row.dictionary_id)) continue;
-        const key = `${row.dictionary_id}::${row.headword}::${row.gloss}`;
+      const res = await client.execute({
+        sql: selectSql,
+        args: [...dictIds, candidate],
+      });
+      for (const row of res.rows) {
+        const dictionary_id = row.dictionary_id as string;
+        if (!dictIdSet.has(dictionary_id)) continue;
+        const headword = row.headword as string;
+        const gloss = row.gloss as string;
+        const reading = row.reading as string;
+        const key = `${dictionary_id}::${headword}::${gloss}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        const meta = dictMetaById.get(row.dictionary_id);
+        const meta = dictMetaById.get(dictionary_id);
         bucket.push({
-          dictionaryId: row.dictionary_id,
+          dictionaryId: dictionary_id,
           dictionaryName: meta?.name ?? "",
           sourceLang: meta?.sourceLang ?? "",
-          headword: row.headword,
-          reading: row.reading,
-          gloss: row.gloss,
+          headword,
+          reading,
+          gloss,
         });
       }
     }
   };
 
-  runLookup(primaryCandidates, new Set(primaryDicts.map((d) => d.id)), primaryResults);
-  runLookup(crossCandidates, new Set(crossDicts.map((d) => d.id)), crossResults);
+  await runLookup(
+    primaryCandidates,
+    new Set(primaryDicts.map((d) => d.id)),
+    primaryResults,
+  );
+  await runLookup(
+    crossCandidates,
+    new Set(crossDicts.map((d) => d.id)),
+    crossResults,
+  );
 
   // Primary hits come first; cross-dict hits appended so the popover
   // shows the "real" answer on top and the cross-reference as extra info.

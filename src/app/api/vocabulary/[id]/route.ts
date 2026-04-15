@@ -26,7 +26,7 @@ export async function PUT(
 
   // Scope lookup by user so a card id from someone else's list returns 404
   // rather than letting cross-user edits through.
-  const existing = db
+  const existing = await db
     .select()
     .from(vocabulary)
     .where(and(eq(vocabulary.id, id), eq(vocabulary.userId, user.id)))
@@ -35,7 +35,8 @@ export async function PUT(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  db.update(vocabulary)
+  await db
+    .update(vocabulary)
     .set({
       word: body.word ?? existing.word,
       reading: body.reading !== undefined ? body.reading : existing.reading,
@@ -56,11 +57,11 @@ export async function DELETE(
   const { id } = await params;
   const db = getDb();
   const user = await getCurrentUser();
-  const result = db
+  const result = await db
     .delete(vocabulary)
     .where(and(eq(vocabulary.id, id), eq(vocabulary.userId, user.id)))
     .run();
-  if (result.changes === 0) {
+  if (result.rowsAffected === 0) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   return NextResponse.json({ ok: true });

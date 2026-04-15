@@ -75,14 +75,14 @@ export async function POST(request: NextRequest) {
     let targetCollectionId: string | null = null;
     let targetCollectionSeq: number | null = null;
     if (rawCollectionId) {
-      const col = db
+      const col = await db
         .select({ userId: collections.userId })
         .from(collections)
         .where(eq(collections.id, rawCollectionId))
         .get();
       if (col && col.userId === user.id) {
         targetCollectionId = rawCollectionId;
-        const maxRow = db
+        const maxRow = await db
           .select({ s: books.collectionSeq })
           .from(books)
           .where(eq(books.collectionId, rawCollectionId))
@@ -97,7 +97,8 @@ export async function POST(request: NextRequest) {
 
     // Insert book. Visibility comes from the form: admin can pick
     // public/private (default public); regular users are always private.
-    db.insert(books)
+    await db
+      .insert(books)
       .values({
         id: bookId,
         title: parsed.title,
@@ -119,7 +120,8 @@ export async function POST(request: NextRequest) {
       const ch = parsed.chapters[i];
       const chapterId = randomUUID();
 
-      db.insert(chapters)
+      await db
+        .insert(chapters)
         .values({
           id: chapterId,
           bookId,
@@ -133,7 +135,8 @@ export async function POST(request: NextRequest) {
       // Only parse paragraphs for first chapter immediately
       if (i === 0) {
         for (let j = 0; j < ch.paragraphs.length; j++) {
-          db.insert(paragraphs)
+          await db
+            .insert(paragraphs)
             .values({
               id: randomUUID(),
               chapterId,

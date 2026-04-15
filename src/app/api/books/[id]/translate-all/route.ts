@@ -46,7 +46,7 @@ export async function POST(
   const { user, book } = result;
 
   // Chapters already fully done have nothing to do — skip them cheaply.
-  const candidateChapters = db
+  const candidateChapters = await db
     .select({ id: chapters.id, status: chapters.status })
     .from(chapters)
     .where(and(eq(chapters.bookId, id), ne(chapters.status, "done")))
@@ -55,9 +55,12 @@ export async function POST(
 
   // Drop chapters the caller isn't allowed to translate (paywall). Admin
   // / public / purchased chapters pass; anything else is silently skipped.
-  const accessibleChapters = candidateChapters.filter((ch) =>
-    hasChapterAccess(user, ch.id),
-  );
+  const accessibleChapters: typeof candidateChapters = [];
+  for (const ch of candidateChapters) {
+    if (await hasChapterAccess(user, ch.id)) {
+      accessibleChapters.push(ch);
+    }
+  }
 
   const lockedSkipped = candidateChapters.length - accessibleChapters.length;
 
@@ -81,7 +84,7 @@ export async function POST(
     let totalChars = 0;
     let totalTranslations = 0;
     for (const ch of accessibleChapters) {
-      const est = estimateChapterWork(ch.id, book.sourceLang);
+      const est = await estimateChapterWork(ch.id, book.sourceLang);
       totalChars += est.queuedChars;
       totalTranslations += est.queuedTranslations;
     }

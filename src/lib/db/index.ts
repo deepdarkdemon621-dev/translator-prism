@@ -1,28 +1,29 @@
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
+import { createClient, type Client } from "@libsql/client";
+import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "./schema";
-import path from "path";
 
-const DB_PATH = path.join(process.cwd(), "data", "db.sqlite");
+const url = process.env.TURSO_DATABASE_URL;
+if (!url) throw new Error("TURSO_DATABASE_URL is required");
 
-let _sqlite: Database.Database | null = null;
+let _client: Client | null = null;
 let _db: ReturnType<typeof drizzle> | null = null;
 
 export function getDb() {
   if (!_db) {
-    _sqlite = new Database(DB_PATH);
-    _sqlite.pragma("journal_mode = WAL");
-    _sqlite.pragma("foreign_keys = ON");
-    _db = drizzle(_sqlite, { schema });
+    _client = createClient({
+      url: url as string,
+      authToken: process.env.TURSO_AUTH_TOKEN || undefined,
+    });
+    _db = drizzle(_client, { schema });
   }
   return _db;
 }
 
 /**
- * Raw better-sqlite3 handle. Use this for FTS5 virtual tables and other
- * features Drizzle's DSL doesn't model.
+ * Raw libsql client. Use for FTS5 virtual tables and other features
+ * Drizzle's DSL doesn't model. Returns a Client with `.execute({ sql, args })`.
  */
-export function getSqlite(): Database.Database {
+export function getLibsqlClient(): Client {
   getDb();
-  return _sqlite!;
+  return _client!;
 }

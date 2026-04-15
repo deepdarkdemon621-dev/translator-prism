@@ -15,15 +15,15 @@ import { and, eq, inArray, ne } from "drizzle-orm";
  * so the reader doesn't show them as "translating" forever. Chapters that
  * are already 'done' are left alone.
  */
-export function cancelBookTranslations(bookId: string): {
+export async function cancelBookTranslations(bookId: string): Promise<{
   cancelled: number;
   chaptersReset: number;
-} {
+}> {
   const db = getDb();
 
   // Pull every paragraph in this book via chapter → paragraph join
   // (drizzle doesn't offer a clean nested IN, so we walk it in two steps).
-  const chapterRows = db
+  const chapterRows = await db
     .select({ id: chapters.id, status: chapters.status })
     .from(chapters)
     .where(eq(chapters.bookId, bookId))
@@ -31,7 +31,7 @@ export function cancelBookTranslations(bookId: string): {
   if (chapterRows.length === 0) return { cancelled: 0, chaptersReset: 0 };
 
   const chapterIds = chapterRows.map((c) => c.id);
-  const paraRows = db
+  const paraRows = await db
     .select({ id: paragraphs.id })
     .from(paragraphs)
     .where(inArray(paragraphs.chapterId, chapterIds))
@@ -43,7 +43,7 @@ export function cancelBookTranslations(bookId: string): {
   // Bulk update: mark every non-terminal translation as cancelled. We
   // treat 'pending' and 'processing' as cancellable; 'done'/'failed'/
   // already-'cancelled' stay put. We count rows that transition.
-  const beforeCount = db
+  const beforeCount = await db
     .select({ id: translations.id })
     .from(translations)
     .where(
@@ -56,7 +56,8 @@ export function cancelBookTranslations(bookId: string): {
 
   if (beforeCount.length === 0) return { cancelled: 0, chaptersReset: 0 };
 
-  db.update(translations)
+  await db
+    .update(translations)
     .set({ status: "cancelled", updatedAt: new Date().toISOString() })
     .where(
       and(
@@ -73,7 +74,8 @@ export function cancelBookTranslations(bookId: string): {
   let chaptersReset = 0;
   for (const ch of chapterRows) {
     if (ch.status !== "translating") continue;
-    db.update(chapters)
+    await db
+      .update(chapters)
       .set({ status: "pending", updatedAt: new Date().toISOString() })
       .where(and(eq(chapters.id, ch.id), ne(chapters.status, "done")))
       .run();

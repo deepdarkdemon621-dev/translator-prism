@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
   // technically read every user's private books, bulk-translating someone
   // else's uploads would both burn their credits and surprise them. Keep
   // the sweep scoped to the admin's own library.
-  const myBooks = db
+  const myBooks = await db
     .select({ id: books.id, sourceLang: books.sourceLang, title: books.title })
     .from(books)
     .where(eq(books.userId, user.id))
@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
   };
   const candidates: Candidate[] = [];
   for (const b of myBooks) {
-    const chs = db
+    const chs = await db
       .select({ id: chapters.id })
       .from(chapters)
       .where(and(eq(chapters.bookId, b.id), ne(chapters.status, "done")))
@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) {
     let totalTranslations = 0;
     const byBook: Record<string, { title: string; chars: number }> = {};
     for (const c of candidates) {
-      const est = estimateChapterWork(c.chapterId, c.sourceLang);
+      const est = await estimateChapterWork(c.chapterId, c.sourceLang);
       totalChars += est.queuedChars;
       totalTranslations += est.queuedTranslations;
       if (!byBook[c.bookId]) byBook[c.bookId] = { title: c.title, chars: 0 };

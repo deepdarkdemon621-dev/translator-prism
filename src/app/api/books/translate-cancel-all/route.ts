@@ -18,7 +18,7 @@ export async function POST() {
   }
 
   const db = getDb();
-  const myBooks = db
+  const myBooks = await db
     .select({ id: books.id })
     .from(books)
     .where(eq(books.userId, user.id))
@@ -28,7 +28,7 @@ export async function POST() {
   let chaptersReset = 0;
   let booksTouched = 0;
   for (const b of myBooks) {
-    const res = cancelBookTranslations(b.id);
+    const res = await cancelBookTranslations(b.id);
     cancelled += res.cancelled;
     chaptersReset += res.chaptersReset;
     if (res.cancelled > 0) booksTouched++;

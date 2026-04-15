@@ -19,7 +19,10 @@ export async function PUT(
 ) {
   const { id } = await params;
   const user = await getCurrentUser();
-  const col = loadOwnedCollection(id, { id: user.id, isAdmin: user.isAdmin });
+  const col = await loadOwnedCollection(id, {
+    id: user.id,
+    isAdmin: user.isAdmin,
+  });
   if (!col) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const body = await request.json().catch(() => ({}));
@@ -29,7 +32,7 @@ export async function PUT(
   }
 
   const db = getDb();
-  const members = db
+  const members = await db
     .select({ id: books.id })
     .from(books)
     .where(eq(books.collectionId, id))
@@ -39,12 +42,14 @@ export async function PUT(
   let seq = 0;
   for (const bookId of order) {
     if (!valid.has(bookId)) continue;
-    db.update(books)
+    await db
+      .update(books)
       .set({ collectionSeq: seq++, updatedAt: new Date().toISOString() })
       .where(eq(books.id, bookId))
       .run();
   }
-  db.update(collections)
+  await db
+    .update(collections)
     .set({ updatedAt: new Date().toISOString() })
     .where(eq(collections.id, id))
     .run();

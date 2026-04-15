@@ -23,12 +23,13 @@ export async function POST(
   }
   const { paragraph: para, book } = access;
 
-  const failedTranslations = db
-    .select()
-    .from(translations)
-    .where(eq(translations.paragraphId, id))
-    .all()
-    .filter((t) => t.status === "failed");
+  const failedTranslations = (
+    await db
+      .select()
+      .from(translations)
+      .where(eq(translations.paragraphId, id))
+      .all()
+  ).filter((t) => t.status === "failed");
 
   if (failedTranslations.length === 0) {
     return NextResponse.json({ error: "No failed translations" }, { status: 400 });
@@ -39,14 +40,20 @@ export async function POST(
   // Flip the chapter back out of its terminal state so the reader poll loop
   // resumes. checkChapterDone will move it to "done" or "error" again once
   // everything settles.
-  db.update(chapters)
+  await db
+    .update(chapters)
     .set({ status: "translating", updatedAt: new Date().toISOString() })
     .where(eq(chapters.id, para.chapterId))
     .run();
 
   for (const t of failedTranslations) {
-    db.update(translations)
-      .set({ status: "pending", errorMessage: null, updatedAt: new Date().toISOString() })
+    await db
+      .update(translations)
+      .set({
+        status: "pending",
+        errorMessage: null,
+        updatedAt: new Date().toISOString(),
+      })
       .where(eq(translations.id, t.id))
       .run();
 
@@ -56,28 +63,34 @@ export async function POST(
       fromLang: book.sourceLang,
       toLang: t.lang,
       onComplete: (result) => {
-        db.update(translations)
-          .set({
-            text: result.text,
-            status: "done",
-            model: result.model,
-            tokensUsed: result.tokensUsed,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(translations.id, t.id))
-          .run();
-        checkChapterDone(para.chapterId);
+        void (async () => {
+          await db
+            .update(translations)
+            .set({
+              text: result.text,
+              status: "done",
+              model: result.model,
+              tokensUsed: result.tokensUsed,
+              updatedAt: new Date().toISOString(),
+            })
+            .where(eq(translations.id, t.id))
+            .run();
+          await checkChapterDone(para.chapterId);
+        })();
       },
       onError: (error) => {
-        db.update(translations)
-          .set({
-            status: "failed",
-            errorMessage: error.message,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(eq(translations.id, t.id))
-          .run();
-        checkChapterDone(para.chapterId);
+        void (async () => {
+          await db
+            .update(translations)
+            .set({
+              status: "failed",
+              errorMessage: error.message,
+              updatedAt: new Date().toISOString(),
+            })
+            .where(eq(translations.id, t.id))
+            .run();
+          await checkChapterDone(para.chapterId);
+        })();
       },
     });
   }

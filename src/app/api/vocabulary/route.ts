@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
     }
   })();
 
-  const rows = db
+  const rows = await db
     .select()
     .from(vocabulary)
     .where(whereClause)
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
   // Dedup: if the same (user, word, lang) already exists, update it instead
   // of inserting a duplicate row. Dedup is scoped per-user so two users can
   // independently keep their own card for the same word.
-  const existing = db
+  const existing = await db
     .select()
     .from(vocabulary)
     .where(
@@ -111,7 +111,8 @@ export async function POST(request: NextRequest) {
     .get();
 
   if (existing) {
-    db.update(vocabulary)
+    await db
+      .update(vocabulary)
       .set({
         reading: body.reading ?? existing.reading,
         gloss,
@@ -126,7 +127,8 @@ export async function POST(request: NextRequest) {
   }
 
   const id = randomUUID();
-  db.insert(vocabulary)
+  await db
+    .insert(vocabulary)
     .values({
       id,
       userId: user.id,

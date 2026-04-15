@@ -37,11 +37,16 @@ export type BundleKey = keyof typeof BUNDLE_TIERS;
  * Pure-ish — reads DB but does not write — so routes and UI can both
  * call it to show an estimate before charging.
  */
-export function quoteBundle(
+export async function quoteBundle(
   user: SessionUser,
   bookId: string,
   bundle: BundleKey,
-): { chapterIds: string[]; alreadyOwned: number; newCharges: number; credits: number } {
+): Promise<{
+  chapterIds: string[];
+  alreadyOwned: number;
+  newCharges: number;
+  credits: number;
+}> {
   const db = getDb();
   const tier = BUNDLE_TIERS[bundle];
 
@@ -50,7 +55,7 @@ export function quoteBundle(
     .from(chapters)
     .where(eq(chapters.bookId, bookId))
     .orderBy(chapters.index);
-  const chapterRows = (tier.chapters == null
+  const chapterRows = await (tier.chapters == null
     ? baseQuery
     : baseQuery.limit(tier.chapters)
   ).all();
@@ -60,7 +65,7 @@ export function quoteBundle(
     return { chapterIds: [], alreadyOwned: 0, newCharges: 0, credits: 0 };
   }
 
-  const owned = db
+  const owned = await db
     .select({ chapterId: chapterAccess.chapterId })
     .from(chapterAccess)
     .where(
@@ -89,16 +94,19 @@ export function quoteBundle(
  * is allowed to see/translate the chapter at all — admin, public book,
  * or paid chapter_access row.
  */
-export function hasChapterAccess(user: SessionUser, chapterId: string): boolean {
+export async function hasChapterAccess(
+  user: SessionUser,
+  chapterId: string,
+): Promise<boolean> {
   if (user.isAdmin) return true;
   const db = getDb();
-  const chapter = db
+  const chapter = await db
     .select({ bookId: chapters.bookId })
     .from(chapters)
     .where(eq(chapters.id, chapterId))
     .get();
   if (!chapter) return false;
-  const book = db
+  const book = await db
     .select({ visibility: books.visibility, userId: books.userId })
     .from(books)
     .where(eq(books.id, chapter.bookId))
@@ -107,7 +115,7 @@ export function hasChapterAccess(user: SessionUser, chapterId: string): boolean 
   // Public showcase books are free for everyone.
   if (book.visibility === "public") return true;
   // Private book, non-admin, non-public: need a paid row.
-  const row = db
+  const row = await db
     .select({ id: chapterAccess.id })
     .from(chapterAccess)
     .where(
@@ -140,11 +148,11 @@ export class InsufficientCreditsError extends Error {
  * Caller is responsible for having already verified that the book
  * belongs to the user (or that they're admin).
  */
-export function purchaseChapters(
+export async function purchaseChapters(
   user: SessionUser,
   chapterIds: string[],
   options: { discountPct?: number } = {},
-): { creditsSpent: number; granted: number; alreadyOwned: number } {
+): Promise<{ creditsSpent: number; granted: number; alreadyOwned: number }> {
   const db = getDb();
   if (chapterIds.length === 0) {
     return { creditsSpent: 0, granted: 0, alreadyOwned: 0 };
@@ -159,7 +167,7 @@ export function purchaseChapters(
   // as long as no other tab/process is racing. When we move to Postgres
   // for cloud, wrap this body in a real transaction.
 
-  const existing = db
+  const existing = await db
     .select({ chapterId: chapterAccess.chapterId })
     .from(chapterAccess)
     .where(
@@ -182,7 +190,7 @@ export function purchaseChapters(
     : Math.ceil(gross * (1 - discountPct / 100));
 
   if (!user.isAdmin) {
-    const row = db
+    const row = await db
       .select({ credits: users.credits })
       .from(users)
       .where(eq(users.id, user.id))
@@ -191,7 +199,8 @@ export function purchaseChapters(
     if (available < creditsSpent) {
       throw new InsufficientCreditsError(creditsSpent, available);
     }
-    db.update(users)
+    await db
+      .update(users)
       .set({
         credits: available - creditsSpent,
         updatedAt: new Date().toISOString(),
@@ -206,7 +215,8 @@ export function purchaseChapters(
   const perRow = toBuy.length > 0 ? Math.floor(creditsSpent / toBuy.length) : 0;
   const remainder = creditsSpent - perRow * toBuy.length;
   for (let i = 0; i < toBuy.length; i++) {
-    db.insert(chapterAccess)
+    await db
+      .insert(chapterAccess)
       .values({
         id: randomUUID(),
         userId: user.id,
@@ -229,17 +239,21 @@ export function purchaseChapters(
  * source of credits; when Stripe/Alipay land, the webhook calls this
  * same function with a verified amount.
  */
-export function grantCredits(userId: string, amount: number): number {
+export async function grantCredits(
+  userId: string,
+  amount: number,
+): Promise<number> {
   if (amount <= 0) throw new Error("grantCredits amount must be positive");
   const db = getDb();
-  const row = db
+  const row = await db
     .select({ credits: users.credits })
     .from(users)
     .where(eq(users.id, userId))
     .get();
   if (!row) throw new Error("User not found");
   const next = row.credits + amount;
-  db.update(users)
+  await db
+    .update(users)
     .set({ credits: next, updatedAt: new Date().toISOString() })
     .where(eq(users.id, userId))
     .run();

@@ -18,12 +18,13 @@ export async function GET() {
   if (user.isAdmin) {
     whereClause = undefined;
   } else {
-    const adminIds = db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.isAdmin, 1))
-      .all()
-      .map((u) => u.id);
+    const adminIds = (
+      await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.isAdmin, 1))
+        .all()
+    ).map((u) => u.id);
     const adminPublic = adminIds.length
       ? and(eq(collections.visibility, "public"), inArray(collections.userId, adminIds))
       : undefined;
@@ -33,47 +34,49 @@ export async function GET() {
   }
 
   const q = db.select().from(collections);
-  const rows = (whereClause ? q.where(whereClause) : q)
+  const rows = await (whereClause ? q.where(whereClause) : q)
     .orderBy(desc(collections.updatedAt))
     .all();
 
-  const decorated = rows.map((c) => {
-    // Apply the same visibility filter to cover AND count so the card
-    // only reflects books the viewer can actually open. Owner/admin see
-    // everything; other viewers see public-visibility members.
-    const isOwnerOrAdmin = user.isAdmin || c.userId === user.id;
-    const memberFilter = isOwnerOrAdmin
-      ? eq(books.collectionId, c.id)
-      : and(eq(books.collectionId, c.id), eq(books.visibility, "public"));
+  const decorated = await Promise.all(
+    rows.map(async (c) => {
+      // Apply the same visibility filter to cover AND count so the card
+      // only reflects books the viewer can actually open. Owner/admin see
+      // everything; other viewers see public-visibility members.
+      const isOwnerOrAdmin = user.isAdmin || c.userId === user.id;
+      const memberFilter = isOwnerOrAdmin
+        ? eq(books.collectionId, c.id)
+        : and(eq(books.collectionId, c.id), eq(books.visibility, "public"));
 
-    const coverBook = db
-      .select({ id: books.id, coverPath: books.coverPath })
-      .from(books)
-      .where(memberFilter!)
-      .orderBy(asc(books.collectionSeq), asc(books.createdAt))
-      .limit(1)
-      .all();
+      const coverBook = await db
+        .select({ id: books.id, coverPath: books.coverPath })
+        .from(books)
+        .where(memberFilter!)
+        .orderBy(asc(books.collectionSeq), asc(books.createdAt))
+        .limit(1)
+        .all();
 
-    const countRows = db
-      .select({ id: books.id })
-      .from(books)
-      .where(memberFilter!)
-      .all();
-    const countVisible = countRows.length;
+      const countRows = await db
+        .select({ id: books.id })
+        .from(books)
+        .where(memberFilter!)
+        .all();
+      const countVisible = countRows.length;
 
-    const cover = coverBook[0];
-    return {
-      id: c.id,
-      name: c.name,
-      userId: c.userId,
-      visibility: c.visibility,
-      bookCount: countVisible,
-      coverBookId: cover?.id ?? null,
-      coverPath: cover?.coverPath ?? null,
-      createdAt: c.createdAt,
-      updatedAt: c.updatedAt,
-    };
-  });
+      const cover = coverBook[0];
+      return {
+        id: c.id,
+        name: c.name,
+        userId: c.userId,
+        visibility: c.visibility,
+        bookCount: countVisible,
+        coverBookId: cover?.id ?? null,
+        coverPath: cover?.coverPath ?? null,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+      };
+    }),
+  );
 
   return NextResponse.json(decorated);
 }
@@ -100,7 +103,8 @@ export async function POST(request: NextRequest) {
   const db = getDb();
   const id = randomUUID();
   const now = new Date().toISOString();
-  db.insert(collections)
+  await db
+    .insert(collections)
     .values({ id, userId: user.id, name, visibility, createdAt: now, updatedAt: now })
     .run();
 

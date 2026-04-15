@@ -224,7 +224,7 @@ export default function HomePage() {
           {/* Account menu — sign-out lives here. Clerk handles the dropdown
               UI; `afterSignOutUrl` returns the user to /sign-in via the
               proxy.ts matcher. */}
-          <UserButton afterSignOutUrl="/sign-in" />
+          <UserButton />
           {isAdmin && (
             <>
               {/* Library-wide batch translate. Goes through the cost gate

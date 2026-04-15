@@ -19,7 +19,7 @@ export async function GET(
     return NextResponse.json({ error: "Book not found" }, { status: 404 });
   }
 
-  const progress = db
+  const progress = await db
     .select()
     .from(readingProgress)
     .where(
@@ -46,7 +46,7 @@ export async function PUT(
     return NextResponse.json({ error: "Book not found" }, { status: 404 });
   }
 
-  const existing = db
+  const existing = await db
     .select()
     .from(readingProgress)
     .where(
@@ -58,7 +58,8 @@ export async function PUT(
     .get();
 
   if (existing) {
-    db.update(readingProgress)
+    await db
+      .update(readingProgress)
       .set({
         chapterIndex: body.chapterIndex ?? existing.chapterIndex,
         scrollPosition: body.scrollPosition ?? existing.scrollPosition,
@@ -67,7 +68,8 @@ export async function PUT(
       .where(eq(readingProgress.id, existing.id))
       .run();
   } else {
-    db.insert(readingProgress)
+    await db
+      .insert(readingProgress)
       .values({
         id: randomUUID(),
         bookId,

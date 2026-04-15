@@ -37,7 +37,7 @@ export async function POST(
 
   // Scope by user so another user's card id returns 404 instead of
   // letting a stranger advance someone else's SRS stage.
-  const existing = db
+  const existing = await db
     .select()
     .from(vocabulary)
     .where(and(eq(vocabulary.id, id), eq(vocabulary.userId, user.id)))
@@ -48,7 +48,8 @@ export async function POST(
 
   const update = applyReview(existing.stage, rating as ReviewRating);
 
-  db.update(vocabulary)
+  await db
+    .update(vocabulary)
     .set({
       stage: update.stage,
       nextReviewAt: update.nextReviewAt,

@@ -21,6 +21,6 @@ export async function POST(
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
 
-  const { cancelled, chaptersReset } = cancelBookTranslations(id);
+  const { cancelled, chaptersReset } = await cancelBookTranslations(id);
   return NextResponse.json({ cancelled, chaptersReset });
 }

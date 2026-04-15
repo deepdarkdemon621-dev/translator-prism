@@ -14,10 +14,10 @@ export default async function ReadPage({
   ensureDataDir();
   const db = getDb();
 
-  const book = db.select().from(books).where(eq(books.id, bookId)).get();
+  const book = await db.select().from(books).where(eq(books.id, bookId)).get();
   if (!book) notFound();
 
-  const chapterList = db
+  const chapterList = await db
     .select({
       id: chapters.id,
       index: chapters.index,
@@ -29,7 +29,7 @@ export default async function ReadPage({
     .orderBy(chapters.index)
     .all();
 
-  const progress = db
+  const progress = await db
     .select()
     .from(readingProgress)
     .where(eq(readingProgress.bookId, bookId))

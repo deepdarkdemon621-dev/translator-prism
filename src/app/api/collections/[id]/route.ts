@@ -11,7 +11,10 @@ export async function GET(
 ) {
   const { id } = await params;
   const user = await getCurrentUser();
-  const col = loadCollectionForView(id, { id: user.id, isAdmin: user.isAdmin });
+  const col = await loadCollectionForView(id, {
+    id: user.id,
+    isAdmin: user.isAdmin,
+  });
   if (!col) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -27,7 +30,7 @@ export async function GET(
     bookFilter = and(bookFilter, eq(books.visibility, "public"))!;
   }
 
-  const rows = db
+  const rows = await db
     .select({
       id: books.id,
       title: books.title,
@@ -44,14 +47,16 @@ export async function GET(
     .orderBy(asc(books.collectionSeq), asc(books.createdAt))
     .all();
 
-  const decorated = rows.map((b) => {
-    const doneRow = db
-      .select({ n: count() })
-      .from(chapters)
-      .where(and(eq(chapters.bookId, b.id), eq(chapters.status, "done")))
-      .all();
-    return { ...b, translatedChapters: doneRow[0]?.n || 0 };
-  });
+  const decorated = await Promise.all(
+    rows.map(async (b) => {
+      const doneRow = await db
+        .select({ n: count() })
+        .from(chapters)
+        .where(and(eq(chapters.bookId, b.id), eq(chapters.status, "done")))
+        .all();
+      return { ...b, translatedChapters: doneRow[0]?.n || 0 };
+    }),
+  );
 
   return NextResponse.json({
     id: col.id,
@@ -71,7 +76,10 @@ export async function PUT(
 ) {
   const { id } = await params;
   const user = await getCurrentUser();
-  const col = loadOwnedCollection(id, { id: user.id, isAdmin: user.isAdmin });
+  const col = await loadOwnedCollection(id, {
+    id: user.id,
+    isAdmin: user.isAdmin,
+  });
   if (!col) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const body = await request.json().catch(() => ({}));
@@ -80,7 +88,8 @@ export async function PUT(
   if (name.length > 120) return NextResponse.json({ error: "Name too long" }, { status: 400 });
 
   const db = getDb();
-  db.update(collections)
+  await db
+    .update(collections)
     .set({ name, updatedAt: new Date().toISOString() })
     .where(eq(collections.id, id))
     .run();
@@ -94,11 +103,14 @@ export async function DELETE(
 ) {
   const { id } = await params;
   const user = await getCurrentUser();
-  const col = loadOwnedCollection(id, { id: user.id, isAdmin: user.isAdmin });
+  const col = await loadOwnedCollection(id, {
+    id: user.id,
+    isAdmin: user.isAdmin,
+  });
   if (!col) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const db = getDb();
-  db.delete(collections).where(eq(collections.id, id)).run();
+  await db.delete(collections).where(eq(collections.id, id)).run();
   // ON DELETE SET NULL on books.collection_id returns members to top level.
   return NextResponse.json({ success: true });
 }

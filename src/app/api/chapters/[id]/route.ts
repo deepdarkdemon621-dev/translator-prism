@@ -16,38 +16,44 @@ export async function GET(
     return NextResponse.json({ error: "Chapter not found" }, { status: 404 });
   }
 
-  const paras = db
+  const paras = await db
     .select()
     .from(paragraphs)
     .where(eq(paragraphs.chapterId, id))
     .orderBy(paragraphs.seq)
     .all();
 
-  const parasWithTranslations = paras.map((p) => {
-    const trans = db
-      .select()
-      .from(translations)
-      .where(eq(translations.paragraphId, p.id))
-      .all();
+  const parasWithTranslations = await Promise.all(
+    paras.map(async (p) => {
+      const trans = await db
+        .select()
+        .from(translations)
+        .where(eq(translations.paragraphId, p.id))
+        .all();
 
-    return {
-      ...p,
-      translations: trans.reduce(
-        (acc, t) => {
-          acc[t.lang] = {
-            text: t.text,
-            status: t.status,
-            errorMessage: t.errorMessage,
-          };
-          return acc;
-        },
-        {} as Record<
-          string,
-          { text: string | null; status: string; errorMessage: string | null }
-        >,
-      ),
-    };
-  });
+      return {
+        ...p,
+        translations: trans.reduce(
+          (acc, t) => {
+            acc[t.lang] = {
+              text: t.text,
+              status: t.status,
+              errorMessage: t.errorMessage,
+            };
+            return acc;
+          },
+          {} as Record<
+            string,
+            {
+              text: string | null;
+              status: string;
+              errorMessage: string | null;
+            }
+          >,
+        ),
+      };
+    }),
+  );
 
   return NextResponse.json({
     ...chapter,

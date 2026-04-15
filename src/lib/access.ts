@@ -22,12 +22,12 @@ type Paragraph = typeof paragraphs.$inferSelect;
  * "Not accessible" collapses to 404 at the route layer so we don't leak
  * the existence of private books.
  */
-function canSeeBook(user: SessionUser, book: Book): boolean {
+async function canSeeBook(user: SessionUser, book: Book): Promise<boolean> {
   if (user.isAdmin) return true;
   if (book.userId === user.id) return true;
   if (book.visibility !== "public") return false;
   if (!book.userId) return false; // orphaned rows — not visible to strangers
-  const uploader = getDb()
+  const uploader = await getDb()
     .select({ isAdmin: users.isAdmin })
     .from(users)
     .where(eq(users.id, book.userId))
@@ -48,9 +48,9 @@ export async function loadBookForRead(
   id: string,
 ): Promise<{ user: SessionUser; book: Book | null }> {
   const user = await getCurrentUser();
-  const book = getDb().select().from(books).where(eq(books.id, id)).get();
+  const book = await getDb().select().from(books).where(eq(books.id, id)).get();
   if (!book) return { user, book: null };
-  if (!canSeeBook(user, book)) return { user, book: null };
+  if (!(await canSeeBook(user, book))) return { user, book: null };
   return { user, book };
 }
 
@@ -62,9 +62,10 @@ export async function loadBookForWrite(
   | { user: SessionUser; book: Book; forbidden: true }
 > {
   const user = await getCurrentUser();
-  const book = getDb().select().from(books).where(eq(books.id, id)).get();
+  const book = await getDb().select().from(books).where(eq(books.id, id)).get();
   if (!book) return { user, book: null, forbidden: false };
-  if (!canSeeBook(user, book)) return { user, book: null, forbidden: false };
+  if (!(await canSeeBook(user, book)))
+    return { user, book: null, forbidden: false };
   if (!canModifyBook(user, book))
     return { user, book, forbidden: true };
   return { user, book, forbidden: false };
@@ -79,10 +80,18 @@ export async function loadChapterForRead(
 }> {
   const user = await getCurrentUser();
   const db = getDb();
-  const chapter = db.select().from(chapters).where(eq(chapters.id, id)).get();
+  const chapter = await db
+    .select()
+    .from(chapters)
+    .where(eq(chapters.id, id))
+    .get();
   if (!chapter) return { user, chapter: null, book: null };
-  const book = db.select().from(books).where(eq(books.id, chapter.bookId)).get();
-  if (!book || !canSeeBook(user, book))
+  const book = await db
+    .select()
+    .from(books)
+    .where(eq(books.id, chapter.bookId))
+    .get();
+  if (!book || !(await canSeeBook(user, book)))
     return { user, chapter: null, book: null };
   return { user, chapter, book };
 }
@@ -96,11 +105,19 @@ export async function loadChapterForWrite(
 > {
   const user = await getCurrentUser();
   const db = getDb();
-  const chapter = db.select().from(chapters).where(eq(chapters.id, id)).get();
+  const chapter = await db
+    .select()
+    .from(chapters)
+    .where(eq(chapters.id, id))
+    .get();
   if (!chapter)
     return { user, chapter: null, book: null, forbidden: false };
-  const book = db.select().from(books).where(eq(books.id, chapter.bookId)).get();
-  if (!book || !canSeeBook(user, book))
+  const book = await db
+    .select()
+    .from(books)
+    .where(eq(books.id, chapter.bookId))
+    .get();
+  if (!book || !(await canSeeBook(user, book)))
     return { user, chapter: null, book: null, forbidden: false };
   if (!canModifyBook(user, book))
     return { user, chapter, book, forbidden: true };
@@ -134,7 +151,7 @@ export async function loadParagraphForWrite(
 > {
   const user = await getCurrentUser();
   const db = getDb();
-  const paragraph = db
+  const paragraph = await db
     .select()
     .from(paragraphs)
     .where(eq(paragraphs.id, id))
@@ -147,7 +164,7 @@ export async function loadParagraphForWrite(
       book: null,
       forbidden: false,
     };
-  const chapter = db
+  const chapter = await db
     .select()
     .from(chapters)
     .where(eq(chapters.id, paragraph.chapterId))
@@ -160,8 +177,12 @@ export async function loadParagraphForWrite(
       book: null,
       forbidden: false,
     };
-  const book = db.select().from(books).where(eq(books.id, chapter.bookId)).get();
-  if (!book || !canSeeBook(user, book))
+  const book = await db
+    .select()
+    .from(books)
+    .where(eq(books.id, chapter.bookId))
+    .get();
+  if (!book || !(await canSeeBook(user, book)))
     return {
       user,
       paragraph: null,

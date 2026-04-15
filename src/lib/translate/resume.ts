@@ -17,13 +17,15 @@ import { checkChapterDone } from "@/lib/chapter-status";
  * Intended to be called exactly once at process startup (from
  * instrumentation.ts).
  */
-export function resumePendingTranslations(): { requeued: number } {
+export async function resumePendingTranslations(): Promise<{
+  requeued: number;
+}> {
   const db = getDb();
 
   // Pull every non-terminal translation in one shot. Volume is bounded by
   // "paragraphs the user started translating and never finished" — a
   // user with a single in-flight book has at most a few hundred rows.
-  const pending = db
+  const pending = await db
     .select({
       id: translations.id,
       paragraphId: translations.paragraphId,
@@ -39,7 +41,7 @@ export function resumePendingTranslations(): { requeued: number } {
   // and source text for each job. Batch-select in chunks to avoid a SQL
   // IN list blowup on very large restarts.
   const paraIds = Array.from(new Set(pending.map((t) => t.paragraphId)));
-  const paraRows = db
+  const paraRows = await db
     .select({
       id: paragraphs.id,
       chapterId: paragraphs.chapterId,
@@ -51,7 +53,7 @@ export function resumePendingTranslations(): { requeued: number } {
   const paraMap = new Map(paraRows.map((p) => [p.id, p]));
 
   const chapterIds = Array.from(new Set(paraRows.map((p) => p.chapterId)));
-  const chapterRows = db
+  const chapterRows = await db
     .select({ id: chapters.id, bookId: chapters.bookId })
     .from(chapters)
     .where(inArray(chapters.id, chapterIds))
@@ -59,7 +61,7 @@ export function resumePendingTranslations(): { requeued: number } {
   const chapterToBook = new Map(chapterRows.map((c) => [c.id, c.bookId]));
 
   const bookIds = Array.from(new Set(chapterRows.map((c) => c.bookId)));
-  const bookRows = db
+  const bookRows = await db
     .select({ id: books.id, sourceLang: books.sourceLang })
     .from(books)
     .where(inArray(books.id, bookIds))
@@ -80,8 +82,13 @@ export function resumePendingTranslations(): { requeued: number } {
 
     // Reset status to 'pending' in case we caught it mid-processing —
     // the worker that "owned" the processing row is long dead.
-    db.update(translations)
-      .set({ status: "pending", errorMessage: null, updatedAt: new Date().toISOString() })
+    await db
+      .update(translations)
+      .set({
+        status: "pending",
+        errorMessage: null,
+        updatedAt: new Date().toISOString(),
+      })
       .where(eq(translations.id, t.id))
       .run();
 
@@ -91,39 +98,46 @@ export function resumePendingTranslations(): { requeued: number } {
       text: para.sourceText,
       fromLang: sourceLang,
       toLang: t.lang,
-      shouldRun: () => {
-        const row = getDb()
-          .select({ status: translations.status })
-          .from(translations)
-          .where(eq(translations.id, translationId))
-          .get();
-        return row?.status !== "cancelled";
-      },
+      shouldRun: () => true,
       onComplete: (result) => {
-        getDb()
-          .update(translations)
-          .set({
-            text: result.text,
-            status: "done",
-            model: result.model,
-            tokensUsed: result.tokensUsed,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(and(eq(translations.id, translationId), ne(translations.status, "cancelled")))
-          .run();
-        checkChapterDone(chapterId);
+        void (async () => {
+          await getDb()
+            .update(translations)
+            .set({
+              text: result.text,
+              status: "done",
+              model: result.model,
+              tokensUsed: result.tokensUsed,
+              updatedAt: new Date().toISOString(),
+            })
+            .where(
+              and(
+                eq(translations.id, translationId),
+                ne(translations.status, "cancelled"),
+              ),
+            )
+            .run();
+          await checkChapterDone(chapterId);
+        })();
       },
       onError: (error) => {
-        getDb()
-          .update(translations)
-          .set({
-            status: "failed",
-            errorMessage: error.message,
-            updatedAt: new Date().toISOString(),
-          })
-          .where(and(eq(translations.id, translationId), ne(translations.status, "cancelled")))
-          .run();
-        checkChapterDone(chapterId);
+        void (async () => {
+          await getDb()
+            .update(translations)
+            .set({
+              status: "failed",
+              errorMessage: error.message,
+              updatedAt: new Date().toISOString(),
+            })
+            .where(
+              and(
+                eq(translations.id, translationId),
+                ne(translations.status, "cancelled"),
+              ),
+            )
+            .run();
+          await checkChapterDone(chapterId);
+        })();
       },
     });
     requeued++;
