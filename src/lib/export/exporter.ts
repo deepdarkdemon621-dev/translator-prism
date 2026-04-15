@@ -2,7 +2,7 @@ import { getDb } from "@/lib/db";
 import { books, chapters, paragraphs, translations } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import archiver from "archiver";
-import { getExportsStorage } from "@/lib/storage";
+import { getUploadsStorage, getExportsStorage } from "@/lib/storage";
 
 function escapeHtml(s: string): string {
   return s
@@ -10,6 +10,17 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/** Pull the trailing basename out of an image paragraph's sourceMarkup. The
+ * upload route rewrites src to /api/books/{bookId}/images/{filename}, so the
+ * basename is everything after the last "/". Returns null if no src attr. */
+function imageFilenameFromMarkup(markup: string): string | null {
+  const m = markup.match(/src="([^"]+)"/);
+  if (!m) return null;
+  const src = m[1];
+  const slash = src.lastIndexOf("/");
+  return slash >= 0 ? src.substring(slash + 1) : src;
 }
 
 const LANG_LABELS: Record<string, string> = {
@@ -47,9 +58,15 @@ export async function exportJson(bookId: string): Promise<string> {
             .where(eq(translations.paragraphId, p.id))
             .all();
 
+          const fname = p.kind === "image"
+            ? imageFilenameFromMarkup(p.sourceMarkup ?? "")
+            : null;
+
           return {
             seq: p.seq,
+            kind: p.kind,
             source: p.sourceText,
+            ...(fname ? { image: { filename: fname } } : {}),
             translations: Object.fromEntries(
               trans
                 .filter((t) => t.status === "done")
@@ -136,6 +153,8 @@ h1{text-align:center;color:#e94560;}h2{color:#ccc;}`,
   let indexHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(book.title)}</title><link rel="stylesheet" href="style.css"></head><body>
 <h1>${escapeHtml(book.title)}</h1><p style="text-align:center;color:#888">${escapeHtml(book.author)}</p><h2>目录</h2><ul>`;
 
+  const referencedImages = new Set<string>();
+
   for (const ch of chapterList) {
     const chFileName = `chapter-${String(ch.index + 1).padStart(padWidth, "0")}.html`;
     indexHtml += `<li><a href="${chFileName}">${escapeHtml(ch.title)}</a></li>`;
@@ -165,6 +184,14 @@ h1{text-align:center;color:#e94560;}h2{color:#ccc;}`,
     for (const lang of allLangs) {
       chHtml += `<div class="col"><h3>${LANG_LABELS[lang] || lang}</h3>`;
       for (const p of paras) {
+        if (p.kind === "image") {
+          const fname = imageFilenameFromMarkup(p.sourceMarkup ?? "");
+          if (fname) {
+            referencedImages.add(fname);
+            chHtml += `<p><img src="images/${escapeHtml(fname)}" alt="" style="max-width:100%;height:auto;"></p>`;
+          }
+          continue;
+        }
         if (lang === sourceLang) {
           chHtml += `<p>${escapeHtml(p.sourceText)}</p>`;
         } else {
@@ -182,6 +209,15 @@ h1{text-align:center;color:#e94560;}h2{color:#ccc;}`,
 
   indexHtml += "</ul></body></html>";
   archive.append(indexHtml, { name: "index.html" });
+
+  for (const fname of referencedImages) {
+    try {
+      const bytes = await getUploadsStorage().get(`${bookId}/images/${fname}`);
+      archive.append(bytes, { name: `images/${fname}` });
+    } catch {
+      // Skip missing images silently
+    }
+  }
 
   await archive.finalize();
   await done;
