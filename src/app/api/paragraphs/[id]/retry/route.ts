@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { translations, chapters } from "@/lib/db/schema";
-import { and, eq, ne } from "drizzle-orm";
-import { getTranslationQueue } from "@/lib/queue/translation-queue";
-import { checkChapterDone } from "@/lib/chapter-status";
+import { eq } from "drizzle-orm";
 import { loadParagraphForWrite } from "@/lib/access";
 
 export async function POST(
@@ -21,7 +19,7 @@ export async function POST(
   if (access.forbidden) {
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
-  const { paragraph: para, book } = access;
+  const { paragraph: para } = access;
 
   const failedTranslations = (
     await db
@@ -35,17 +33,18 @@ export async function POST(
     return NextResponse.json({ error: "No failed translations" }, { status: 400 });
   }
 
-  const queue = getTranslationQueue();
-
   // Flip the chapter back out of its terminal state so the reader poll loop
-  // resumes. checkChapterDone will move it to "done" or "error" again once
-  // everything settles.
+  // resumes. checkChapterDone (called by the worker on completion) will move
+  // it to "done" or "error" again once everything settles.
   await db
     .update(chapters)
     .set({ status: "translating", updatedAt: new Date().toISOString() })
     .where(eq(chapters.id, para.chapterId))
     .run();
 
+  // Pure-DB enqueue: flip failed rows to 'pending' and the worker poller
+  // picks them up. No in-process queue, no callbacks — the worker handles
+  // result persistence and chapter-done bookkeeping.
   for (const t of failedTranslations) {
     await db
       .update(translations)
@@ -56,63 +55,6 @@ export async function POST(
       })
       .where(eq(translations.id, t.id))
       .run();
-
-    queue.add({
-      translationId: t.id,
-      text: para.sourceText,
-      fromLang: book.sourceLang,
-      toLang: t.lang,
-      onComplete: (result) => {
-        void (async () => {
-          await db
-            .update(translations)
-            .set({
-              text: result.text,
-              status: "done",
-              model: result.model,
-              tokensUsed: result.tokensUsed,
-              updatedAt: new Date().toISOString(),
-            })
-            .where(
-              and(
-                eq(translations.id, t.id),
-                ne(translations.status, "cancelled"),
-              ),
-            )
-            .run();
-          await checkChapterDone(para.chapterId);
-        })().catch((err) => {
-          console.error(
-            "[retry:onComplete] failed to persist translation result:",
-            err,
-          );
-        });
-      },
-      onError: (error) => {
-        void (async () => {
-          await db
-            .update(translations)
-            .set({
-              status: "failed",
-              errorMessage: error.message,
-              updatedAt: new Date().toISOString(),
-            })
-            .where(
-              and(
-                eq(translations.id, t.id),
-                ne(translations.status, "cancelled"),
-              ),
-            )
-            .run();
-          await checkChapterDone(para.chapterId);
-        })().catch((err) => {
-          console.error(
-            "[retry:onError] failed to persist translation failure:",
-            err,
-          );
-        });
-      },
-    });
   }
 
   return NextResponse.json({ retried: failedTranslations.length });

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
-import { resetTranslationQueue } from "@/lib/queue/translation-queue";
 import { getCurrentUser } from "@/lib/auth";
 
 const SETTINGS_PATH = path.join(process.cwd(), "data", "settings.json");
@@ -75,6 +74,7 @@ export async function PUT(request: NextRequest) {
   };
 
   await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
-  resetTranslationQueue();
+  // The worker reads settings on demand per job, so no in-process reset
+  // is needed here. Settings changes take effect on the next job poll.
   return NextResponse.json({ success: true });
 }
