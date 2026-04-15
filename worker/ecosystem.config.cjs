@@ -1,10 +1,12 @@
+const path = require("path");
+
 module.exports = {
   apps: [
     {
       name: "prism-worker",
       script: "tsx",
       args: "worker/index.ts",
-      cwd: __dirname + "/..",
+      cwd: path.join(__dirname, ".."),
       env_file: ".env.worker",
       autorestart: true,
       max_restarts: 50,

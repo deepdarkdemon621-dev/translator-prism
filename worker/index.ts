@@ -1,3 +1,12 @@
+// SINGLE-WORKER INVARIANT
+// This worker is designed to run exactly once per project — on the user's
+// local machine, supervised by PM2. `resetStaleProcessing()` below flips
+// EVERY row in 'processing' back to 'pending' on startup, which is only safe
+// under that assumption. Running a second worker against the same Turso
+// database would cause worker A's restart to steal worker B's in-flight rows,
+// leading to double-execution and wasted LLM spend. If we ever need to
+// fan out to multiple workers, add a `locked_until` lease column and only
+// reset rows whose lease has expired.
 import { config as loadEnv } from "dotenv";
 import path from "path";
 
