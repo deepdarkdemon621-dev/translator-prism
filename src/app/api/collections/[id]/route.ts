@@ -1,25 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { books, chapters, collections, collectionBooks } from "@/lib/db/schema";
+import { books, chapters, collections } from "@/lib/db/schema";
 import { and, asc, count, eq } from "drizzle-orm";
-import { loadOwnedCollection } from "@/lib/collections";
+import { getCurrentUser } from "@/lib/auth";
+import { loadCollectionForView, loadOwnedCollection } from "@/lib/collections";
 
-/**
- * GET: full collection detail — metadata + ordered book list with the
- * same progress/cover fields the library grid consumes. Drives the
- * /collection/[id] page in one round-trip.
- */
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const { collection } = await loadOwnedCollection(id);
-  if (!collection) {
+  const user = await getCurrentUser();
+  const col = loadCollectionForView(id, { id: user.id, isAdmin: user.isAdmin });
+  if (!col) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   const db = getDb();
+
+  // Book visibility inside this collection:
+  //   - owner or admin: see every book
+  //   - other user viewing admin's public collection: only public books
+  let bookFilter = eq(books.collectionId, id);
+  const isOwnerOrAdmin = col.userId === user.id || user.isAdmin;
+  if (!isOwnerOrAdmin) {
+    bookFilter = and(bookFilter, eq(books.visibility, "public"))!;
+  }
+
   const rows = db
     .select({
       id: books.id,
@@ -29,12 +36,12 @@ export async function GET(
       coverPath: books.coverPath,
       totalChapters: books.totalChapters,
       status: books.status,
-      seq: collectionBooks.seq,
+      userId: books.userId,
+      seq: books.collectionSeq,
     })
-    .from(collectionBooks)
-    .innerJoin(books, eq(books.id, collectionBooks.bookId))
-    .where(eq(collectionBooks.collectionId, id))
-    .orderBy(asc(collectionBooks.seq), asc(collectionBooks.createdAt))
+    .from(books)
+    .where(bookFilter)
+    .orderBy(asc(books.collectionSeq), asc(books.createdAt))
     .all();
 
   const decorated = rows.map((b) => {
@@ -47,35 +54,30 @@ export async function GET(
   });
 
   return NextResponse.json({
-    id: collection.id,
-    name: collection.name,
-    createdAt: collection.createdAt,
-    updatedAt: collection.updatedAt,
+    id: col.id,
+    name: col.name,
+    userId: col.userId,
+    visibility: col.visibility,
+    createdAt: col.createdAt,
+    updatedAt: col.updatedAt,
+    isReadOnly: col.userId !== user.id, // admin backdoor view-only flag
     books: decorated,
   });
 }
 
-/**
- * PUT: rename. Only `name` is editable — the cover auto-derives and
- * there's no other user-facing knob.
- */
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const { collection } = await loadOwnedCollection(id);
-  if (!collection) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  const user = await getCurrentUser();
+  const col = loadOwnedCollection(id, { id: user.id, isAdmin: user.isAdmin });
+  if (!col) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   const body = await request.json().catch(() => ({}));
   const name = typeof body.name === "string" ? body.name.trim() : "";
-  if (!name) {
-    return NextResponse.json({ error: "Name required" }, { status: 400 });
-  }
-  if (name.length > 120) {
-    return NextResponse.json({ error: "Name too long" }, { status: 400 });
-  }
+  if (!name) return NextResponse.json({ error: "Name required" }, { status: 400 });
+  if (name.length > 120) return NextResponse.json({ error: "Name too long" }, { status: 400 });
 
   const db = getDb();
   db.update(collections)
@@ -86,22 +88,17 @@ export async function PUT(
   return NextResponse.json({ id, name });
 }
 
-/**
- * DELETE: removes the collection + cascade-drops membership rows.
- * The underlying books stay — this is a "dissolve the shelf", not a
- * "burn the books" operation.
- */
 export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const { collection } = await loadOwnedCollection(id);
-  if (!collection) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
+  const user = await getCurrentUser();
+  const col = loadOwnedCollection(id, { id: user.id, isAdmin: user.isAdmin });
+  if (!col) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const db = getDb();
   db.delete(collections).where(eq(collections.id, id)).run();
+  // ON DELETE SET NULL on books.collection_id returns members to top level.
   return NextResponse.json({ success: true });
 }

@@ -1,14 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextResponse, NextRequest } from "next/server";
 import { getDb } from "@/lib/db";
 import { ensureDataDir } from "@/lib/db/init";
 import { books, chapters, paragraphs, translations, users } from "@/lib/db/schema";
-import { desc, eq, and, count, or, inArray } from "drizzle-orm";
+import { desc, eq, and, count, or, inArray, isNull } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   ensureDataDir();
   const db = getDb();
   const user = await getCurrentUser();
+  const scope = request.nextUrl.searchParams.get("scope");
 
   // Library for a regular user = their own uploads + public books that
   // an admin uploaded. Public books uploaded by other regular users stay
@@ -48,11 +49,19 @@ export async function GET() {
       status: books.status,
       userId: books.userId,
       visibility: books.visibility,
+      collectionId: books.collectionId,
       createdAt: books.createdAt,
     })
     .from(books);
 
-  const allBooks = (whereClause ? query.where(whereClause) : query)
+  const finalWhere =
+    scope === "top"
+      ? whereClause
+        ? and(whereClause, isNull(books.collectionId))
+        : isNull(books.collectionId)
+      : whereClause;
+
+  const allBooks = (finalWhere ? query.where(finalWhere) : query)
     .orderBy(desc(books.createdAt))
     .all();
 

@@ -5,6 +5,16 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import Link from "next/link";
 import { translateAllWithGate } from "@/lib/translate/client";
 
@@ -23,8 +33,17 @@ interface BookCardProps {
     /** Count of translations still pending or processing for this book.
      * Drives the Cancel button: shown only when > 0. */
     pendingTranslations?: number;
+    userId?: string | null;
+    collectionId?: string | null;
   };
+  currentUserId?: string;
+  isAdmin?: boolean;
+  /** Collections available as move destinations. Should be the caller's
+   * own collections; passing an admin-public collection the caller
+   * doesn't own will be silently rejected by the server. */
+  collections?: Array<{ id: string; name: string }>;
   onDelete: (id: string) => void;
+  onMove?: (bookId: string, collectionId: string | null) => void;
   /** Notify parent when a translate/cancel finished so the list can refetch
    * and update counts. Optional — older call-sites work without it. */
   onChange?: () => void;
@@ -36,7 +55,15 @@ const LANG_LABELS: Record<string, string> = {
   en: "English",
 };
 
-export function BookCard({ book, onDelete, onChange }: BookCardProps) {
+export function BookCard({
+  book,
+  currentUserId,
+  isAdmin,
+  collections,
+  onDelete,
+  onMove,
+  onChange,
+}: BookCardProps) {
   const progress =
     book.totalChapters > 0
       ? Math.round((book.translatedChapters / book.totalChapters) * 100)
@@ -106,6 +133,14 @@ export function BookCard({ book, onDelete, onChange }: BookCardProps) {
               {book.title.trim().charAt(0) || "?"}
             </div>
           )}
+          {isAdmin && book.userId && currentUserId && book.userId !== currentUserId && (
+            <span
+              className="absolute top-1 left-1 rounded-sm bg-background/85 backdrop-blur-sm px-1 text-[9px] font-medium tabular-nums shadow-sm"
+              title="Owned by another user"
+            >
+              @other
+            </span>
+          )}
         </div>
         <CardContent className="flex-1 min-w-0 p-3 flex flex-col justify-between">
           <div>
@@ -169,20 +204,56 @@ export function BookCard({ book, onDelete, onChange }: BookCardProps) {
                 </Button>
               )
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs px-2 text-muted-foreground hover:text-destructive hover:border-destructive/40"
-              onClick={() => {
-                if (confirm("Delete this book and all translations?")) {
-                  onDelete(book.id);
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-7 px-0 text-muted-foreground"
+                    aria-label="More actions"
+                  >
+                    ⋯
+                  </Button>
                 }
-              }}
-              title="Delete"
-              aria-label="Delete book"
-            >
-              ×
-            </Button>
+              />
+              <DropdownMenuContent align="end" className="w-44">
+                {onMove && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>Move to…</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {book.collectionId !== null && book.collectionId !== undefined && (
+                        <DropdownMenuItem onClick={() => onMove(book.id, null)}>
+                          Top level
+                        </DropdownMenuItem>
+                      )}
+                      {(collections ?? [])
+                        .filter((c) => c.id !== book.collectionId)
+                        .map((c) => (
+                          <DropdownMenuItem
+                            key={c.id}
+                            onClick={() => onMove(book.id, c.id)}
+                          >
+                            {c.name}
+                          </DropdownMenuItem>
+                        ))}
+                      {(collections ?? []).length === 0 && book.collectionId == null && (
+                        <DropdownMenuItem disabled>No collections</DropdownMenuItem>
+                      )}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="text-destructive focus:text-destructive"
+                  onClick={() => {
+                    if (confirm("Delete this book and all translations?")) onDelete(book.id);
+                  }}
+                >
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </CardContent>
       </div>

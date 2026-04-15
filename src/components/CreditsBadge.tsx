@@ -103,6 +103,10 @@ function TopUpDialogBody({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Top-up failed");
       onCompleted(data.credits);
+      // Let any open dialog relying on a credit snapshot (e.g. PricingDialog)
+      // refresh — otherwise its Buy buttons stay disabled on the stale
+      // balance it fetched before the top-up.
+      window.dispatchEvent(new CustomEvent("credits-changed"));
       setCustom("");
     } catch (err) {
       setError((err as Error).message);

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, primaryKey } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
 
 // Fixed UUID for the seed admin user. Referenced from the 0003 migration so
 // the app has a known tenant to attribute pre-existing data to; once Clerk is
@@ -32,6 +32,15 @@ export const books = sqliteTable("books", {
   userId: text("user_id").references(() => users.id),
   // 'public' = showcase book visible to all; 'private' = only owner sees it.
   visibility: text("visibility").notNull().default("public"),
+  // Folder-model: a book lives in at most one collection. NULL = top
+  // level (shown in main library). When set, the book is hidden from
+  // the main library and shown inside the collection view instead.
+  // ON DELETE SET NULL in the migration — deleting a collection returns
+  // its books to top level without cascading into the books table.
+  collectionId: text("collection_id").references(() => collections.id, { onDelete: "set null" }),
+  // Display order inside the collection. Lowest wins and also
+  // determines the collection cover. NULL when collectionId is NULL.
+  collectionSeq: integer("collection_seq"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
@@ -120,37 +129,19 @@ export const vocabulary = sqliteTable("vocabulary", {
 
 // Collections: a user's named bundle of books (a series, a mood shelf).
 // The cover image shown for the collection is inherited from whichever
-// book sits at the smallest seq — we don't store a cover on the
-// collection itself so renames/moves in collection_books automatically
-// propagate without a separate update path.
+// member book has the smallest collection_seq — we don't store a cover
+// on the collection itself, so reordering books automatically propagates.
 export const collections = sqliteTable("collections", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id),
   name: text("name").notNull(),
+  // Admin's collections default to 'public' (visible to all users,
+  // symmetric to admin-public books). Regular users' collections are
+  // always 'private'; the create endpoint enforces this.
+  visibility: text("visibility").notNull().default("private"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
-
-// Join table. A book can belong to multiple collections (same book in
-// "Currently reading" and "Fantasy" is legal); composite PK prevents
-// duplicate inserts. seq is the display order inside the collection
-// AND the tie-breaker for "which cover wins" — lowest seq = cover.
-export const collectionBooks = sqliteTable(
-  "collection_books",
-  {
-    collectionId: text("collection_id")
-      .notNull()
-      .references(() => collections.id, { onDelete: "cascade" }),
-    bookId: text("book_id")
-      .notNull()
-      .references(() => books.id, { onDelete: "cascade" }),
-    seq: integer("seq").notNull().default(0),
-    createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
-  },
-  (t) => ({
-    pk: primaryKey({ columns: [t.collectionId, t.bookId] }),
-  }),
-);
 
 // Paywall: presence of a row means "user has paid to translate/read this
 // chapter". Public books and admin users skip the check entirely — see

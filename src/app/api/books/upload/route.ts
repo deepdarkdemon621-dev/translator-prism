@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { ensureDataDir } from "@/lib/db/init";
-import { books, chapters, paragraphs } from "@/lib/db/schema";
+import { books, chapters, collections, paragraphs } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 import { parseEpub } from "@/lib/epub/parser";
 import { getCurrentUser } from "@/lib/auth";
 import { getUploadsStorage, getCoversStorage } from "@/lib/storage";
@@ -66,6 +67,34 @@ export async function POST(request: NextRequest) {
 
     const db = getDb();
 
+    // Optional destination collection. Silently ignored if it doesn't
+    // resolve to a collection owned by the current user — the upload must
+    // succeed regardless of folder placement. The book just lands top-level
+    // in that case and the user can move it manually.
+    const rawCollectionId = (formData.get("collectionId") as string | null)?.trim();
+    let targetCollectionId: string | null = null;
+    let targetCollectionSeq: number | null = null;
+    if (rawCollectionId) {
+      const col = db
+        .select({ userId: collections.userId })
+        .from(collections)
+        .where(eq(collections.id, rawCollectionId))
+        .get();
+      if (col && col.userId === user.id) {
+        targetCollectionId = rawCollectionId;
+        const maxRow = db
+          .select({ s: books.collectionSeq })
+          .from(books)
+          .where(eq(books.collectionId, rawCollectionId))
+          .all();
+        const maxSeq = maxRow.reduce(
+          (m, r) => (r.s != null && r.s > m ? r.s : m),
+          -1,
+        );
+        targetCollectionSeq = maxSeq + 1;
+      }
+    }
+
     // Insert book. Visibility comes from the form: admin can pick
     // public/private (default public); regular users are always private.
     db.insert(books)
@@ -80,6 +109,8 @@ export async function POST(request: NextRequest) {
         status: "parsed",
         userId: user.id,
         visibility,
+        collectionId: targetCollectionId,
+        collectionSeq: targetCollectionSeq,
       })
       .run();
 

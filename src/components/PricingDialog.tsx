@@ -75,6 +75,15 @@ export function PricingDialog({ bookId, bookTitle, onDone }: PricingDialogProps)
     }
   }, [bookId, load]);
 
+  // Refetch when the user tops up in the sibling CreditsBadge — otherwise
+  // our `userCredits` snapshot goes stale and Buy stays "Low balance".
+  useEffect(() => {
+    if (!bookId) return;
+    const handler = () => load();
+    window.addEventListener("credits-changed", handler);
+    return () => window.removeEventListener("credits-changed", handler);
+  }, [bookId, load]);
+
   const handlePurchase = async (bundle: TierQuote["bundle"]) => {
     if (!bookId) return;
     setPurchasing(bundle);

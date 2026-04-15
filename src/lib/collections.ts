@@ -1,79 +1,144 @@
 import { getDb } from "@/lib/db";
-import { books, collections, collectionBooks } from "@/lib/db/schema";
-import { and, eq } from "drizzle-orm";
-import { getCurrentUser, type SessionUser } from "@/lib/auth";
+import { books, collections } from "@/lib/db/schema";
+import { and, eq, isNull } from "drizzle-orm";
+
+/** Minimal shape of the acting user — pass from callers that already
+ * resolved getCurrentUser(). Keeps this module free of auth imports. */
+interface Actor {
+  id: string;
+  isAdmin: boolean;
+}
 
 /**
- * Return the collection if the current caller owns it, otherwise null.
- * Collections are per-user — admin doesn't get a cross-tenant view,
- * by design. Returns the user too so the caller doesn't need a second
- * getCurrentUser() round-trip.
+ * Load a collection for read purposes, honoring visibility rules:
+ *   - owner sees their own collection (any visibility)
+ *   - admin sees any collection (view-only backdoor)
+ *   - otherwise: returns the row only if visibility='public'
+ *
+ * Returns null when the caller has no read access. Use this instead of
+ * the old loadOwnedCollection when the endpoint is a pure read — GET
+ * /api/collections/[id] for instance. For write endpoints, check
+ * `row.userId === actor.id` after loading (admin still can't mutate
+ * another user's collection; the backdoor is view-only).
  */
-export async function loadOwnedCollection(collectionId: string): Promise<{
-  user: SessionUser;
-  collection: typeof collections.$inferSelect | null;
-}> {
-  const user = await getCurrentUser();
+export function loadCollectionForView(
+  collectionId: string,
+  actor: Actor,
+): typeof collections.$inferSelect | null {
   const db = getDb();
-  const col = db
+  const row = db
+    .select()
+    .from(collections)
+    .where(eq(collections.id, collectionId))
+    .get();
+  if (!row) return null;
+  if (row.userId === actor.id) return row;
+  if (actor.isAdmin) return row;
+  if (row.visibility === "public") return row;
+  return null;
+}
+
+/**
+ * Load a collection for a write operation. Only the owner may mutate —
+ * admin's backdoor is strictly view-only, so a foreign row returns null
+ * even for admin. Mirrors the old loadOwnedCollection signature.
+ */
+export function loadOwnedCollection(
+  collectionId: string,
+  actor: Actor,
+): typeof collections.$inferSelect | null {
+  const db = getDb();
+  const row = db
     .select()
     .from(collections)
     .where(
-      and(
-        eq(collections.id, collectionId),
-        eq(collections.userId, user.id),
-      ),
+      and(eq(collections.id, collectionId), eq(collections.userId, actor.id)),
     )
     .get();
-  return { user, collection: col ?? null };
+  return row ?? null;
 }
 
 /**
- * Visibility rule for adding a book to a collection: a user can add
- * any book they can see in their library (own + public). Admin can
- * add anything. Prevents users from linking against a stranger's
- * private upload just because they guessed the id.
+ * Atomically move a book into a collection (or to top level). Validates:
+ *   - the acting user owns the book
+ *   - when targetCollectionId is non-null, the acting user owns that
+ *     collection
+ *
+ * Throws on permission failure — the caller translates to a 403. Admin
+ * status is not special here: admin only moves their own books into
+ * their own collections. Prevents cross-tenant ownership drift.
+ *
+ * On success, sets collection_id + collection_seq atomically. collection_seq
+ * becomes NULL when moving to top level, or `(max current seq) + 1` when
+ * moving into a collection (appended to tail — preserves the current
+ * cover).
  */
-export function canUseBookInCollection(
-  user: SessionUser,
-  bookId: string,
-): boolean {
+export function moveBookToCollection(params: {
+  bookId: string;
+  targetCollectionId: string | null;
+  actingUserId: string;
+  actingIsAdmin: boolean;
+}): void {
+  const { bookId, targetCollectionId, actingUserId } = params;
   const db = getDb();
+
   const book = db
-    .select({ userId: books.userId, visibility: books.visibility })
+    .select({ userId: books.userId })
     .from(books)
     .where(eq(books.id, bookId))
     .get();
-  if (!book) return false;
-  if (user.isAdmin) return true;
-  if (book.userId === user.id) return true;
-  return book.visibility === "public";
+  if (!book) throw new Error("book not found");
+  if (book.userId !== actingUserId) {
+    throw new Error("book not owned by caller");
+  }
+
+  let nextSeq: number | null = null;
+  if (targetCollectionId !== null) {
+    const target = db
+      .select({ userId: collections.userId })
+      .from(collections)
+      .where(eq(collections.id, targetCollectionId))
+      .get();
+    if (!target) throw new Error("collection not found");
+    if (target.userId !== actingUserId) {
+      throw new Error("collection not owned by caller");
+    }
+    // Append to tail: max(collection_seq) + 1 within the target collection.
+    const maxRow = db
+      .select({ s: books.collectionSeq })
+      .from(books)
+      .where(eq(books.collectionId, targetCollectionId))
+      .all();
+    const maxSeq = maxRow.reduce(
+      (m, r) => (r.s != null && r.s > m ? r.s : m),
+      -1,
+    );
+    nextSeq = maxSeq + 1;
+  }
+
+  db.update(books)
+    .set({
+      collectionId: targetCollectionId,
+      collectionSeq: nextSeq,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(books.id, bookId))
+    .run();
+
+  // Bump the collection's updatedAt on the target so list ordering
+  // reflects recent activity. Source collection is not updated here —
+  // if needed later, a move helper could read the old collection_id
+  // first and touch both.
+  if (targetCollectionId) {
+    db.update(collections)
+      .set({ updatedAt: new Date().toISOString() })
+      .where(eq(collections.id, targetCollectionId))
+      .run();
+  }
 }
 
-/**
- * Append a book to the tail of a collection. seq gets set to
- * (current max seq) + 1 so the new row lands last. No-ops on conflict
- * (same book re-added) so the endpoint is idempotent from the caller's
- * perspective.
- */
-export function appendBookToCollection(
-  collectionId: string,
-  bookId: string,
-): void {
-  const db = getDb();
-  const rows = db
-    .select({ seq: collectionBooks.seq })
-    .from(collectionBooks)
-    .where(eq(collectionBooks.collectionId, collectionId))
-    .all();
-  const maxSeq = rows.reduce((m, r) => (r.seq > m ? r.seq : m), -1);
-  db.insert(collectionBooks)
-    .values({
-      collectionId,
-      bookId,
-      seq: maxSeq + 1,
-      createdAt: new Date().toISOString(),
-    })
-    .onConflictDoNothing()
-    .run();
+/** Top-level books clause for the main library view. Kept here so the
+ * filter stays in one place alongside other visibility helpers. */
+export function topLevelVisibilityClause() {
+  return isNull(books.collectionId);
 }

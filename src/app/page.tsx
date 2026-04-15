@@ -29,6 +29,8 @@ interface Book {
   status: string;
   coverPath?: string | null;
   pendingTranslations?: number;
+  userId?: string | null;
+  collectionId?: string | null;
 }
 
 interface Collection {
@@ -37,12 +39,15 @@ interface Collection {
   bookCount: number;
   coverBookId: string | null;
   coverPath: string | null;
+  userId?: string;
+  visibility?: "public" | "private";
 }
 
 export default function HomePage() {
   const [books, setBooks] = useState<Book[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [currentUser, setCurrentUser] = useState<{ id: string; isAdmin: boolean } | null>(null);
+  const isAdmin = currentUser?.isAdmin ?? false;
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
@@ -51,10 +56,8 @@ export default function HomePage() {
   const [importing, setImporting] = useState(false);
 
   const fetchBooks = useCallback(async () => {
-    const res = await fetch("/api/books");
-    if (res.ok) {
-      setBooks(await res.json());
-    }
+    const res = await fetch("/api/books?scope=top");
+    if (res.ok) setBooks(await res.json());
   }, []);
 
   const fetchCollections = useCallback(async () => {
@@ -69,19 +72,17 @@ export default function HomePage() {
     fetchCollections();
   }, [fetchBooks, fetchCollections]);
 
-  // Admin check drives admin-only UI (Dictionaries nav link today; Import
-  // and Translate-all-pending buttons in a follow-up step).
   useEffect(() => {
     let cancelled = false;
     fetch("/api/user")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: { isAdmin?: boolean } | null) => {
-        if (!cancelled && data?.isAdmin) setIsAdmin(true);
+      .then((data: { id?: string; isAdmin?: boolean } | null) => {
+        if (!cancelled && data?.id) {
+          setCurrentUser({ id: data.id, isAdmin: !!data.isAdmin });
+        }
       })
       .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   const handleDelete = async (id: string) => {
@@ -91,6 +92,20 @@ export default function HomePage() {
       // Deleting a book cascades to membership rows; refresh the
       // collection covers + counts so the shelf reflects reality.
       fetchCollections();
+    }
+  };
+
+  const handleMove = async (bookId: string, collectionId: string | null) => {
+    const res = await fetch(`/api/books/${bookId}/move`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ collectionId }),
+    });
+    if (res.ok) {
+      fetchBooks();
+      fetchCollections();
+    } else {
+      alert(`Move failed: ${await res.text()}`);
     }
   };
 
@@ -282,41 +297,39 @@ export default function HomePage() {
         <UploadZone onUploadComplete={fetchBooks} />
       </section>
 
-      {(collections.length > 0 || books.length > 0) && (
-        <section className="mb-10">
-          <div className="flex items-center justify-between mb-5">
-            <h2 className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-              Collections
-            </h2>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setCreateOpen(true)}
-            >
-              + New collection
-            </Button>
+      <section className="mb-10">
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+            Collections
+          </h2>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCreateOpen(true)}
+          >
+            + New collection
+          </Button>
+        </div>
+        {collections.length === 0 ? (
+          <p className="text-sm text-muted-foreground italic"
+            style={{ fontFamily: "var(--font-heading)" }}
+          >
+            Group books into a series — the first book's cover becomes the shelf.
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-5">
+            {collections.map((c, i) => (
+              <div
+                key={c.id}
+                className="stagger-fade-in"
+                style={{ animationDelay: `${200 + i * 60}ms` }}
+              >
+                <CollectionCard collection={c} currentUserId={currentUser?.id} isAdmin={isAdmin} />
+              </div>
+            ))}
           </div>
-          {collections.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic"
-              style={{ fontFamily: "var(--font-heading)" }}
-            >
-              Group books into a series — the first book's cover becomes the shelf.
-            </p>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-5">
-              {collections.map((c, i) => (
-                <div
-                  key={c.id}
-                  className="stagger-fade-in"
-                  style={{ animationDelay: `${200 + i * 60}ms` }}
-                >
-                  <CollectionCard collection={c} />
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
+        )}
+      </section>
 
       {books.length > 0 ? (
         <section>
@@ -332,7 +345,7 @@ export default function HomePage() {
                 className="stagger-fade-in"
                 style={{ animationDelay: `${250 + i * 60}ms` }}
               >
-                <BookCard book={book} onDelete={handleDelete} onChange={fetchBooks} />
+                <BookCard book={book} onDelete={handleDelete} onChange={fetchBooks} currentUserId={currentUser?.id} collections={collections} onMove={handleMove} />
               </div>
             ))}
           </div>

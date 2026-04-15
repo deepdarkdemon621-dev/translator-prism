@@ -23,22 +23,18 @@ interface CollectionBook {
   totalChapters: number;
   translatedChapters: number;
   status: string;
-  seq: number;
+  seq: number | null;
 }
 
 interface CollectionDetail {
   id: string;
   name: string;
+  userId: string;
+  visibility: "public" | "private";
+  isReadOnly: boolean;
   createdAt: string;
   updatedAt: string;
   books: CollectionBook[];
-}
-
-interface LibraryBook {
-  id: string;
-  title: string;
-  author: string;
-  coverPath?: string | null;
 }
 
 const LANG_LABELS: Record<string, string> = {
@@ -56,8 +52,6 @@ export default function CollectionPage({
   const router = useRouter();
   const [collection, setCollection] = useState<CollectionDetail | null>(null);
   const [notFound, setNotFound] = useState(false);
-  const [library, setLibrary] = useState<LibraryBook[]>([]);
-  const [addOpen, setAddOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
 
@@ -72,32 +66,19 @@ export default function CollectionPage({
     }
   }, [id]);
 
-  const fetchLibrary = useCallback(async () => {
-    const res = await fetch("/api/books");
-    if (res.ok) setLibrary(await res.json());
-  }, []);
-
   useEffect(() => {
     fetchCollection();
-    fetchLibrary();
-  }, [fetchCollection, fetchLibrary]);
+  }, [fetchCollection]);
 
   useEffect(() => {
     if (notFound) router.replace("/");
   }, [notFound, router]);
 
-  const handleAdd = async (bookId: string) => {
-    const res = await fetch(`/api/collections/${id}/books`, {
+  const handleMoveOut = async (bookId: string) => {
+    const res = await fetch(`/api/books/${bookId}/move`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bookId }),
-    });
-    if (res.ok) fetchCollection();
-  };
-
-  const handleRemove = async (bookId: string) => {
-    const res = await fetch(`/api/collections/${id}/books/${bookId}`, {
-      method: "DELETE",
+      body: JSON.stringify({ collectionId: null }),
     });
     if (res.ok) fetchCollection();
   };
@@ -109,7 +90,6 @@ export default function CollectionPage({
     if (idx < 0 || newIdx < 0 || newIdx >= collection.books.length) return;
     const next = [...collection.books];
     [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
-    // Optimistic update so the cover changes immediately.
     setCollection({ ...collection, books: next });
     await fetch(`/api/collections/${id}/books`, {
       method: "PUT",
@@ -150,9 +130,7 @@ export default function CollectionPage({
     );
   }
 
-  // Books not already in the collection — offered in the "Add book" dialog.
-  const memberIds = new Set(collection.books.map((b) => b.id));
-  const addable = library.filter((b) => !memberIds.has(b.id));
+  const readOnly = collection.isReadOnly;
 
   return (
     <div className="min-h-screen px-6 py-10 sm:py-14 max-w-5xl mx-auto">
@@ -184,30 +162,27 @@ export default function CollectionPage({
             )}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setRenameOpen(true)}>
-          Rename
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-muted-foreground hover:text-destructive hover:border-destructive/40"
-          onClick={handleDeleteCollection}
-        >
-          Delete
-        </Button>
+        {!readOnly && (
+          <>
+            <Button variant="outline" size="sm" onClick={() => setRenameOpen(true)}>
+              Rename
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-muted-foreground hover:text-destructive hover:border-destructive/40"
+              onClick={handleDeleteCollection}
+            >
+              Delete
+            </Button>
+          </>
+        )}
       </header>
 
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-5">
         <h2 className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
           Books in this series
         </h2>
-        <Button
-          size="sm"
-          disabled={addable.length === 0}
-          onClick={() => setAddOpen(true)}
-        >
-          + Add book
-        </Button>
       </div>
 
       {collection.books.length === 0 ? (
@@ -216,7 +191,7 @@ export default function CollectionPage({
             This collection is empty.
           </p>
           <p className="text-sm text-muted-foreground/70 mt-1">
-            Click &quot;Add book&quot; to bring a book from your library.
+            Upload a book with this collection selected, or move an existing book in from the library.
           </p>
         </Card>
       ) : (
@@ -258,99 +233,40 @@ export default function CollectionPage({
                   {book.author} · {LANG_LABELS[book.sourceLang] ?? book.sourceLang} · {book.translatedChapters}/{book.totalChapters}
                 </p>
               </div>
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  disabled={i === 0}
-                  onClick={() => moveBy(book.id, -1)}
-                  aria-label="Move up"
-                >
-                  ↑
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  disabled={i === collection.books.length - 1}
-                  onClick={() => moveBy(book.id, 1)}
-                  aria-label="Move down"
-                >
-                  ↓
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-muted-foreground hover:text-destructive"
-                  onClick={() => handleRemove(book.id)}
-                >
-                  Remove
-                </Button>
-              </div>
+              {!readOnly && (
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={i === 0}
+                    onClick={() => moveBy(book.id, -1)}
+                    aria-label="Move up"
+                  >
+                    ↑
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={i === collection.books.length - 1}
+                    onClick={() => moveBy(book.id, 1)}
+                    aria-label="Move down"
+                  >
+                    ↓
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => handleMoveOut(book.id)}
+                  >
+                    Move out
+                  </Button>
+                </div>
+              )}
             </li>
           ))}
         </ol>
       )}
-
-      {/* Add book picker. Only shows library books not already in this
-          collection; clicking a row appends it to the tail so the cover
-          doesn't move unexpectedly. */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add book</DialogTitle>
-          </DialogHeader>
-          {addable.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic py-6 text-center">
-              Every book in your library is already in this collection.
-            </p>
-          ) : (
-            <div className="max-h-[50vh] overflow-y-auto space-y-1.5">
-              {addable.map((b) => (
-                <button
-                  key={b.id}
-                  type="button"
-                  className="w-full flex items-center gap-3 p-2 rounded-lg hover:bg-accent/60 transition-colors text-left"
-                  onClick={() => {
-                    handleAdd(b.id);
-                    // Close only if this was the last addable book;
-                    // otherwise keep open so user can add multiple.
-                    if (addable.length === 1) setAddOpen(false);
-                  }}
-                >
-                  <div className="relative h-12 w-9 overflow-hidden rounded bg-muted/40 shrink-0">
-                    {b.coverPath ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={`/api/books/${b.id}/cover`}
-                        alt=""
-                        className="absolute inset-0 h-full w-full object-cover"
-                      />
-                    ) : (
-                      <div
-                        className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground/50"
-                        style={{ fontFamily: "var(--font-heading)" }}
-                      >
-                        {b.title.charAt(0)}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{b.title}</div>
-                    <div className="text-xs text-muted-foreground truncate">
-                      {b.author}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAddOpen(false)}>
-              Done
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>

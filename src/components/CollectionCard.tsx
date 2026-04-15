@@ -10,7 +10,11 @@ interface CollectionCardProps {
     bookCount: number;
     coverBookId: string | null;
     coverPath: string | null;
+    userId?: string;
+    visibility?: "public" | "private";
   };
+  currentUserId?: string;
+  isAdmin?: boolean;
 }
 
 /**
@@ -20,8 +24,10 @@ interface CollectionCardProps {
  * first-by-seq book — fetched via the book-cover API, not a separate
  * collection-cover endpoint.
  */
-export function CollectionCard({ collection }: CollectionCardProps) {
+export function CollectionCard({ collection, currentUserId, isAdmin }: CollectionCardProps) {
   const { id, name, bookCount, coverBookId, coverPath } = collection;
+  const isOther =
+    !!isAdmin && !!collection.userId && !!currentUserId && collection.userId !== currentUserId;
 
   return (
     <Link href={`/collections/${id}`} className="block group">
@@ -49,6 +55,14 @@ export function CollectionCard({ collection }: CollectionCardProps) {
           <div className="pointer-events-none absolute inset-y-2 right-0 flex flex-col gap-1.5">
             <div className="h-full w-1 bg-background/40 rounded-l-sm shadow-[inset_1px_0_0_rgba(0,0,0,0.1)]" />
           </div>
+          {isOther && (
+            <div
+              className="absolute top-2 left-2 rounded-sm bg-background/85 backdrop-blur-sm px-1.5 py-0.5 text-[10px] font-medium shadow-sm"
+              title="Owned by another user"
+            >
+              @other
+            </div>
+          )}
           <div className="absolute bottom-2 right-2 rounded-full bg-background/85 backdrop-blur-sm px-2 py-0.5 text-[10px] font-medium tabular-nums shadow-sm">
             {bookCount}
           </div>

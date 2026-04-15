@@ -32,6 +32,9 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps) {
   // because the admin's library is intended to be the "shared shelf".
   // Regular users always upload private — no toggle shown.
   const [visibility, setVisibility] = useState<"public" | "private">("public");
+  // Destination collection for the upload. "" means top level.
+  const [targetCollectionId, setTargetCollectionId] = useState<string>("");
+  const [ownCollections, setOwnCollections] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +42,22 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps) {
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { isAdmin?: boolean } | null) => {
         if (!cancelled && data?.isAdmin) setIsAdmin(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    // /api/collections returns own + admin-public for regulars, all for
+    // admin. The server's upload handler silently drops a non-owned
+    // collectionId, so a loose filter here is fine.
+    fetch("/api/collections")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: Array<{ id: string; name: string }>) => {
+        if (!cancelled) setOwnCollections(rows);
       })
       .catch(() => {});
     return () => {
@@ -63,6 +82,7 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps) {
         // this field for regular users and forces 'private'. We still send
         // it for admin so their toggle is respected.
         if (isAdmin) formData.append("visibility", visibility);
+        if (targetCollectionId) formData.append("collectionId", targetCollectionId);
 
         const res = await fetch("/api/books/upload", {
           method: "POST",
@@ -73,7 +93,14 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps) {
         if (!res.ok) {
           throw new Error(data.error || "Upload failed");
         }
-        setPending({ id: data.id, title: data.title });
+        // Admin skips the pricing gate — their translations go through the
+        // translate-all cost gate instead, and showcase uploads shouldn't
+        // be blocked by a per-chapter bundle picker.
+        if (isAdmin) {
+          onUploadComplete();
+        } else {
+          setPending({ id: data.id, title: data.title });
+        }
 
         if (autoTranslate) {
           // Kick translate-all in the background. Errors (incl. cost-gate
@@ -92,7 +119,7 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps) {
         setIsUploading(false);
       }
     },
-    [autoTranslate, isAdmin, visibility],
+    [autoTranslate, isAdmin, visibility, targetCollectionId, onUploadComplete],
   );
 
   const handleDrop = useCallback(
@@ -180,6 +207,24 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps) {
           </>
         )}
         {error && <p className="text-destructive mt-3 text-sm">{error}</p>}
+      </div>
+
+      <div className="mt-3 flex items-center gap-3 text-sm text-muted-foreground">
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <span className="text-xs uppercase tracking-wider">Collection</span>
+          <select
+            className="rounded-md border border-border/70 bg-background px-2 py-1 text-sm"
+            value={targetCollectionId}
+            onChange={(e) => setTargetCollectionId(e.target.value)}
+          >
+            <option value="">Top level</option>
+            {ownCollections.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {isAdmin && (
