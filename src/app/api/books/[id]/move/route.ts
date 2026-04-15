@@ -32,7 +32,7 @@ export async function POST(
   }
 
   try {
-    moveBookToCollection({
+    await moveBookToCollection({
       bookId: id,
       targetCollectionId,
       actingUserId: user.id,

@@ -18,7 +18,7 @@ export async function GET() {
   if (!user.isAdmin) {
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
-  const dicts = listDictionaries();
+  const dicts = await listDictionaries();
   return NextResponse.json(dicts);
 }
 
@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
         ? ` (${targetLang})`
         : "";
 
-    const result = installDictionary({
+    const result = await installDictionary({
       name: baseName + autoSuffix,
       format: info.format,
       sourceLang: info.sourceLang,

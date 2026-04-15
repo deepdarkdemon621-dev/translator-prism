@@ -31,6 +31,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
 
-  const next = grantCredits(targetUserId, amount);
+  const next = await grantCredits(targetUserId, amount);
   return NextResponse.json({ userId: targetUserId, credits: next });
 }

@@ -23,7 +23,7 @@ export async function POST(
 
   // Paywall: private books require a purchased chapter_access row (admin
   // and public-showcase books are waved through inside hasChapterAccess).
-  if (!hasChapterAccess(user, id)) {
+  if (!(await hasChapterAccess(user, id))) {
     return NextResponse.json(
       { error: "Chapter locked — purchase required", code: "chapter_locked" },
       { status: 402 },

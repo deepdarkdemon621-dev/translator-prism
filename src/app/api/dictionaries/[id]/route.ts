@@ -11,7 +11,7 @@ export async function DELETE(
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
   const { id } = await params;
-  const removed = uninstallDictionary(id);
+  const removed = await uninstallDictionary(id);
   if (!removed) {
     return NextResponse.json({ error: "Dictionary not found" }, { status: 404 });
   }
