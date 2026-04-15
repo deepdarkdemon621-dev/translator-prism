@@ -53,6 +53,16 @@ export function CreditsBadge() {
     };
   }, [refreshTick]);
 
+  // Sibling dialogs (e.g. PricingDialog on "Top up" click) can request the
+  // top-up flow via a window event. Stacking the top-up modal on top of the
+  // caller's own modal keeps context while letting the user add credits
+  // without losing their spot.
+  useEffect(() => {
+    const handler = () => setDialogOpen(true);
+    window.addEventListener("open-topup", handler);
+    return () => window.removeEventListener("open-topup", handler);
+  }, []);
+
   return (
     <Dialog
       open={dialogOpen}

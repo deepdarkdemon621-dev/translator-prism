@@ -164,17 +164,22 @@ export function PricingDialog({ bookId, bookTitle, onDone }: PricingDialogProps)
                       disabled={
                         purchasing !== null ||
                         tier.chapterIds.length === 0 ||
-                        tier.newCharges === 0 ||
-                        insufficient
+                        tier.newCharges === 0
                       }
-                      onClick={() => handlePurchase(tier.bundle)}
+                      onClick={() => {
+                        if (insufficient) {
+                          window.dispatchEvent(new CustomEvent("open-topup"));
+                        } else {
+                          handlePurchase(tier.bundle);
+                        }
+                      }}
                     >
                       {purchasing === tier.bundle
                         ? "…"
-                        : insufficient
-                          ? "Low balance"
-                          : tier.newCharges === 0
-                            ? "Owned"
+                        : tier.newCharges === 0
+                          ? "Owned"
+                          : insufficient
+                            ? "Top up"
                             : "Buy"}
                     </Button>
                   </div>
