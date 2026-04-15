@@ -7,6 +7,8 @@ interface Paragraph {
   id: string;
   seq: number;
   sourceText: string;
+  sourceMarkup: string;
+  kind: "text" | "image";
   translations: Record<
     string,
     { text: string | null; status: string; errorMessage?: string | null }
@@ -132,6 +134,18 @@ export function ColumnView({
       </div>
       <div className="max-w-[42rem] mx-auto">
         {paragraphs.map((p) => {
+          if (p.kind === "image") {
+            const src = p.sourceMarkup.match(/src="([^"]+)"/)?.[1];
+            return (
+              <div key={p.id} className={SPACING_CLASS[paragraphSpacing]}>
+                {src ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={src} alt={p.sourceText} className="block mx-auto max-w-full h-auto" loading="lazy" />
+                ) : null}
+              </div>
+            );
+          }
+
           const isSource = lang === sourceLang;
           const text = isSource
             ? p.sourceText

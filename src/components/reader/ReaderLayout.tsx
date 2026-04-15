@@ -20,6 +20,8 @@ interface Paragraph {
   id: string;
   seq: number;
   sourceText: string;
+  sourceMarkup: string;
+  kind: "text" | "image";
   translations: Record<
     string,
     { text: string | null; status: string; errorMessage?: string | null }
