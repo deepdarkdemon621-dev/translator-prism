@@ -38,8 +38,12 @@ export interface Storage {
    * the returned stream to finalize the write. The local backend pipes
    * through to `fs.createWriteStream`; a cloud backend will wrap a
    * PassThrough with an S3 multipart upload attached to its `finish`.
+   *
+   * Return type is narrowed to `NodeJS.WritableStream` so backends that
+   * don't use `fs` (R2's PassThrough) don't need an unsound cast.
+   * `fs.WriteStream` satisfies this — local callers keep working.
    */
-  openWriteStream(key: string): fs.WriteStream;
+  openWriteStream(key: string): NodeJS.WritableStream;
 }
 
 class LocalFsStorage implements Storage {
@@ -88,13 +92,21 @@ class LocalFsStorage implements Storage {
 
 class R2Storage implements Storage {
   private client: S3Client;
-  constructor(private readonly bucket: string, private readonly prefix: string) {
+  private readonly bucket: string;
+  constructor(private readonly prefix: string) {
+    // All four R2 envs are read and validated here so a misconfigured
+    // deploy fails fast at construction instead of deep in an S3 call
+    // with a confusing "empty bucket" error.
     const endpoint = process.env.R2_ENDPOINT;
     const accessKeyId = process.env.R2_ACCESS_KEY_ID;
     const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
-    if (!endpoint || !accessKeyId || !secretAccessKey) {
-      throw new Error("R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY required");
+    const bucket = process.env.R2_BUCKET;
+    if (!endpoint || !accessKeyId || !secretAccessKey || !bucket) {
+      throw new Error(
+        "R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET required",
+      );
     }
+    this.bucket = bucket;
     this.client = new S3Client({
       region: "auto",
       endpoint,
@@ -145,7 +157,7 @@ class R2Storage implements Storage {
     );
   }
 
-  openWriteStream(key: string): fs.WriteStream {
+  openWriteStream(key: string): NodeJS.WritableStream {
     const pass = new PassThrough();
     const upload = new Upload({
       client: this.client,
@@ -155,21 +167,27 @@ class R2Storage implements Storage {
         Body: pass,
       },
     });
-    upload.done().catch((err) => pass.emit("error", err));
-    return pass as unknown as fs.WriteStream;
+    // Defer the error emit: `upload.done()` can reject synchronously
+    // (bad creds, invalid key, etc.) before the caller has attached an
+    // `error` listener. An un-listened `error` event crashes the
+    // process. `queueMicrotask` gives the caller one tick to wire up
+    // listeners without delaying propagation to the next I/O turn.
+    upload.done().catch((err) => {
+      queueMicrotask(() => pass.emit("error", err));
+    });
+    return pass;
   }
 }
 
 const BASE = path.join(process.cwd(), "data");
 const DRIVER = process.env.STORAGE_DRIVER ?? "fs";
-const R2_BUCKET = process.env.R2_BUCKET ?? "";
 
 let _uploads: Storage | null = null;
 let _exports: Storage | null = null;
 let _covers: Storage | null = null;
 
 function make(fsSubdir: string, r2Prefix: string): Storage {
-  if (DRIVER === "r2") return new R2Storage(R2_BUCKET, r2Prefix);
+  if (DRIVER === "r2") return new R2Storage(r2Prefix);
   return new LocalFsStorage(path.join(BASE, fsSubdir));
 }
 
