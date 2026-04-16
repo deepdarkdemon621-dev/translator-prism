@@ -10,11 +10,6 @@ interface SystemStatus {
   recentCode: string | null;
 }
 
-// Poll cadence. 30s is the sweet spot: short enough that a user reading
-// in the /read page will see a fresh banner if their overnight translation
-// run just ran out of tokens, long enough that we're not thrashing the API.
-const POLL_MS = 30_000;
-
 // Paths that render their own richer banner OR where a global banner is
 // actively harmful (the clerk sign-in forms shouldn't show anything we
 // control). Progress page is excluded because its in-card banner already
@@ -25,6 +20,11 @@ const SKIP_PATH_PREFIXES = ["/progress", "/sign-in", "/sign-up"];
  * App-wide banner that surfaces blocking LLM states (quota exhausted,
  * auth error) on every page. Lives at the top of the layout so the
  * user can't miss it while they're browsing the library or reading.
+ *
+ * Fetches once per path change instead of polling — the previous 30s
+ * interval was scanning the translations table on every tick and
+ * dominated our Turso row-read budget. Users who want a fresh view
+ * can navigate or open /progress (which has its own in-card banner).
  */
 export function GlobalQuotaBanner() {
   const pathname = usePathname();
@@ -36,7 +36,7 @@ export function GlobalQuotaBanner() {
   useEffect(() => {
     if (skip) return;
     let cancelled = false;
-    const poll = async () => {
+    (async () => {
       try {
         const res = await fetch("/api/system-status", { cache: "no-store" });
         if (!res.ok) return;
@@ -45,14 +45,11 @@ export function GlobalQuotaBanner() {
       } catch {
         // Swallow — probe failures shouldn't break the UI.
       }
-    };
-    poll();
-    const id = setInterval(poll, POLL_MS);
+    })();
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
-  }, [skip]);
+  }, [skip, pathname]);
 
   // Reset dismiss state when the status changes between blocking/non-blocking.
   // Means: after the user clicks retry and the queue clears, the banner

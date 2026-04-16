@@ -177,16 +177,46 @@ export function ReaderLayout({
   // Poll for translation status while the chapter is still progressing.
   // Terminal states ("done", "error") stop polling — a user Retry re-sets
   // the chapter to "translating" via the retry API, which restarts the loop.
+  //
+  // Suspends while the tab is hidden (Page Visibility API) so a reader
+  // left open in a background tab doesn't keep burning Turso row reads.
+  // Interval is 10s — 3s was more aggressive than translation latency
+  // requires and was the single largest consumer of reads per session.
   useEffect(() => {
     if (!currentChapter || !content) return;
     if (content.status === "done" || content.status === "error") return;
 
-    const interval = setInterval(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const tick = () => {
       if (!currentChapter) return;
       fetchContent(currentChapter.id).catch(() => {});
-    }, 3000);
+    };
+    const start = () => {
+      if (interval != null) return;
+      interval = setInterval(tick, 10_000);
+    };
+    const stop = () => {
+      if (interval == null) return;
+      clearInterval(interval);
+      interval = null;
+    };
+    const handleVisibility = () => {
+      if (document.hidden) stop();
+      else {
+        // Reset stale data when we come back — user has been away, the
+        // translation may have finished without us noticing.
+        tick();
+        start();
+      }
+    };
 
-    return () => clearInterval(interval);
+    if (!document.hidden) start();
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
   }, [currentChapter, content, fetchContent]);
 
   return (
