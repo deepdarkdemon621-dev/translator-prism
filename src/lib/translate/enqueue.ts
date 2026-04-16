@@ -56,13 +56,24 @@ export async function enqueueChapterTranslations(
           }
           return;
         }
-        if (tag === "img" && !insideParagraph) {
-          const src = $(node).attr("src");
+        // Accept both HTML <img> and SVG <image xlink:href>. For SVG we
+        // synthesize an <img> tag — the original xlink:href will not have
+        // been rewritten by rewriteImageSrcs (which only matches src="…"),
+        // so we use the original href as-is; it's already absolute only
+        // for HTML <img>. Legacy chapters with SVG covers rarely hit this
+        // path (parser now emits the row up front), but keep the branch
+        // so the fallback stays consistent.
+        if ((tag === "img" || tag === "image") && !insideParagraph) {
+          const src =
+            $(node).attr("src") ||
+            $(node).attr("xlink:href") ||
+            $(node).attr("href");
           if (!src) return;
           const alt = ($(node).attr("alt") || "").trim();
-          // sourceHtml already has rewritten absolute src; reuse the node
-          // markup verbatim via $.html.
-          const markup = $.html(node) || `<img src="${src}" alt="${alt}">`;
+          const markup =
+            tag === "img"
+              ? $.html(node) || `<img src="${src}" alt="${alt}">`
+              : `<img src="${src}" alt="${alt}">`;
           extracted.push({ text: alt, markup, kind: "image" });
           return;
         }

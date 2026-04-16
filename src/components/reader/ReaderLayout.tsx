@@ -247,8 +247,27 @@ export function ReaderLayout({
               );
             })
           ) : (
-            <div className="flex-1 flex items-center justify-center text-muted-foreground">
-              {content ? "No paragraphs" : "Loading..."}
+            <div className="flex-1 flex items-center justify-center p-8">
+              {content ? (
+                <div className="text-center max-w-sm">
+                  <p className="text-muted-foreground text-sm mb-1">
+                    This chapter has no translatable text.
+                  </p>
+                  <p className="text-muted-foreground/70 text-xs mb-4">
+                    It&apos;s likely a cover or image-only page.
+                  </p>
+                  {currentIndex < chapters.length - 1 && (
+                    <button
+                      onClick={() => setCurrentIndex((i) => Math.min(chapters.length - 1, i + 1))}
+                      className="text-primary text-sm hover:underline"
+                    >
+                      Skip to next chapter →
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="text-muted-foreground text-sm">Loading…</div>
+              )}
             </div>
           )}
         </div>

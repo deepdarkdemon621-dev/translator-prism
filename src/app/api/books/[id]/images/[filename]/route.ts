@@ -16,6 +16,10 @@ const MIME_BY_EXT: Record<string, string> = {
   webp: "image/webp",
   gif: "image/gif",
   svg: "image/svg+xml",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  tif: "image/tiff",
+  tiff: "image/tiff",
 };
 
 function isSafeFilename(name: string): boolean {

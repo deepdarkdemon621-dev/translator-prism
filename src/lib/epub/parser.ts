@@ -6,6 +6,12 @@ import type { Element } from "domhandler";
 // infer from the file extension or skip. Keep this list in sync with
 // the content-type returned by the /api/books/:id/cover route so we
 // don't set a mime we can't also serve.
+// EPUB image formats we persist end-to-end. Mirrors the formats that the
+// /api/books/:id/cover and /api/books/:id/images/:name routes can serve.
+// Anything not in this set is skipped (no paragraph row, no stored bytes)
+// rather than persisted as an unknown mime.
+const KNOWN_EXTS = ["jpg", "png", "webp", "gif", "svg", "avif", "bmp", "tiff"] as const;
+
 function extFromMime(mime: string, href: string): string {
   const m = mime.toLowerCase();
   if (m.includes("jpeg") || m.includes("jpg")) return "jpg";
@@ -13,12 +19,16 @@ function extFromMime(mime: string, href: string): string {
   if (m.includes("webp")) return "webp";
   if (m.includes("gif")) return "gif";
   if (m.includes("svg")) return "svg";
+  if (m.includes("avif")) return "avif";
+  if (m.includes("bmp")) return "bmp";
+  if (m.includes("tiff") || m.includes("tif")) return "tiff";
   // Fall back to whatever is after the last dot in the href.
   const extMatch = href.toLowerCase().match(/\.([a-z0-9]+)$/);
   if (extMatch) {
-    const ext = extMatch[1];
-    if (ext === "jpeg") return "jpg";
-    if (["jpg", "png", "webp", "gif", "svg"].includes(ext)) return ext;
+    let ext = extMatch[1];
+    if (ext === "jpeg") ext = "jpg";
+    if (ext === "tif") ext = "tiff";
+    if ((KNOWN_EXTS as readonly string[]).includes(ext)) return ext;
   }
   return "jpg";
 }
@@ -29,6 +39,9 @@ function mimeFromExt(ext: string): string {
     case "webp": return "image/webp";
     case "gif": return "image/gif";
     case "svg": return "image/svg+xml";
+    case "avif": return "image/avif";
+    case "bmp": return "image/bmp";
+    case "tiff": return "image/tiff";
     default: return "image/jpeg";
   }
 }
@@ -283,8 +296,16 @@ export async function parseEpub(buffer: Buffer): Promise<ParsedEpub> {
           // Don't descend further; nested <img> inside <p> stays in markup.
           return;
         }
-        if (tag === "img" && !insideParagraph) {
-          const src = $ch(node).attr("src");
+        // <img> (HTML) and <image> (SVG) both become image rows. SVG's
+        // xlink:href is common in EPUBs for cover/illustration pages —
+        // cheerio with xmlMode preserves the "xlink:href" attribute name
+        // verbatim, so we try both. Normalize to an <img> markup row so
+        // rewriteImageSrcs / the reader don't need to know the origin.
+        if ((tag === "img" || tag === "image") && !insideParagraph) {
+          const src =
+            $ch(node).attr("src") ||
+            $ch(node).attr("xlink:href") ||
+            $ch(node).attr("href");
           if (src) {
             const alt = ($ch(node).attr("alt") || "").trim();
             // Resolve relative to chapter file, collapse "../" segments.
