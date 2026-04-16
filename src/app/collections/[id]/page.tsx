@@ -16,6 +16,7 @@ import {
 import { translateAllWithGate } from "@/lib/translate/client";
 import { useSelection } from "@/components/library/useSelection";
 import { SelectionBar } from "@/components/library/SelectionBar";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -67,6 +68,7 @@ export default function CollectionPage({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [allCollections, setAllCollections] = useState<Array<{ id: string; name: string }>>([]);
   const bookSelect = useSelection();
+  const confirm = useConfirm();
 
   useEffect(() => {
     let cancelled = false;
@@ -119,7 +121,13 @@ export default function CollectionPage({
   };
 
   const handleCancelTranslate = async (book: CollectionBook) => {
-    if (!confirm(`Cancel ${book.pendingTranslations} pending translation(s)? In-flight calls can't be stopped but their results will be discarded.`)) return;
+    if (!(await confirm({
+      title: `Cancel ${book.pendingTranslations} pending translation(s)?`,
+      description: "In-flight calls can't be stopped but their results will be discarded.",
+      confirmText: "Cancel translations",
+      cancelText: "Keep running",
+      destructive: true,
+    }))) return;
     setBusyId(book.id);
     try {
       const res = await fetch(`/api/books/${book.id}/translate-cancel`, { method: "POST" });
@@ -175,9 +183,12 @@ export default function CollectionPage({
   };
 
   const handleDeleteCollection = async () => {
-    if (!confirm("Delete this collection? The books themselves will stay in your library.")) {
-      return;
-    }
+    if (!(await confirm({
+      title: "Delete this collection?",
+      description: "The books themselves will stay in your library.",
+      confirmText: "Delete",
+      destructive: true,
+    }))) return;
     const res = await fetch(`/api/collections/${id}`, { method: "DELETE" });
     if (res.ok) router.push("/");
   };
@@ -207,7 +218,12 @@ export default function CollectionPage({
   const handleBulkDeleteBooks = async () => {
     const ids = Array.from(bookSelect.selected);
     if (ids.length === 0) return;
-    if (!confirm(`Delete ${ids.length} ${ids.length === 1 ? "book" : "books"}? This can't be undone.`)) return;
+    if (!(await confirm({
+      title: `Delete ${ids.length} ${ids.length === 1 ? "book" : "books"}?`,
+      description: "This can't be undone. Translations and files will be removed.",
+      confirmText: "Delete",
+      destructive: true,
+    }))) return;
     const res = await fetch("/api/books/bulk", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useSelection } from "@/components/library/useSelection";
 import { SelectionBar } from "@/components/library/SelectionBar";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -64,6 +65,7 @@ export default function HomePage() {
   const [importing, setImporting] = useState(false);
   const bookSelect = useSelection();
   const collectionSelect = useSelection();
+  const confirm = useConfirm();
 
   const fetchBooks = useCallback(async () => {
     const res = await fetch("/api/books?scope=top");
@@ -152,7 +154,13 @@ export default function HomePage() {
       alert("Nothing to cancel — no pending translations.");
       return;
     }
-    if (!confirm("Cancel every pending translation across your whole library?")) return;
+    if (!(await confirm({
+      title: "Cancel every pending translation?",
+      description: "In-flight calls can't be stopped but their results will be discarded.",
+      confirmText: "Cancel all",
+      cancelText: "Keep running",
+      destructive: true,
+    }))) return;
     setCancellingAll(true);
     try {
       const res = await fetch("/api/books/translate-cancel-all", { method: "POST" });
@@ -215,7 +223,12 @@ export default function HomePage() {
   const handleBulkDeleteBooks = async () => {
     const ids = Array.from(bookSelect.selected);
     if (ids.length === 0) return;
-    if (!confirm(`Delete ${ids.length} ${ids.length === 1 ? "book" : "books"}? This can't be undone.`)) return;
+    if (!(await confirm({
+      title: `Delete ${ids.length} ${ids.length === 1 ? "book" : "books"}?`,
+      description: "This can't be undone. Translations and files will be removed.",
+      confirmText: "Delete",
+      destructive: true,
+    }))) return;
     const res = await fetch("/api/books/bulk", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -265,11 +278,16 @@ export default function HomePage() {
     const totalBooks = collections
       .filter((c) => collectionSelect.selected.has(c.id))
       .reduce((n, c) => n + c.bookCount, 0);
-    const msg =
+    const description =
       totalBooks > 0
-        ? `Delete ${ids.length} ${ids.length === 1 ? "collection" : "collections"} and all ${totalBooks} ${totalBooks === 1 ? "book" : "books"} inside them? This can't be undone.`
-        : `Delete ${ids.length} ${ids.length === 1 ? "collection" : "collections"}? This can't be undone.`;
-    if (!confirm(msg)) return;
+        ? `All ${totalBooks} ${totalBooks === 1 ? "book" : "books"} inside will also be deleted. This can't be undone.`
+        : "This can't be undone.";
+    if (!(await confirm({
+      title: `Delete ${ids.length} ${ids.length === 1 ? "collection" : "collections"}?`,
+      description,
+      confirmText: "Delete",
+      destructive: true,
+    }))) return;
     const res = await fetch("/api/collections/bulk", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -381,7 +399,15 @@ export default function HomePage() {
       </header>
 
       <section className="mb-12 animate-in fade-in slide-in-from-bottom-3 duration-700 delay-150">
-        <UploadZone onUploadComplete={fetchBooks} />
+        <UploadZone
+          onUploadComplete={() => {
+            // Refresh both: the book itself plus collection cover/count if
+            // it was uploaded into one. Cheap enough that we always do both.
+            fetchBooks();
+            fetchCollections();
+          }}
+          collections={collections}
+        />
       </section>
 
       <section className="mb-10">

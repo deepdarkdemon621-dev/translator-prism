@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import Link from "next/link";
 import { translateAllWithGate } from "@/lib/translate/client";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 interface BookCardProps {
   book: {
@@ -78,6 +79,7 @@ export function BookCard({
       : 0;
   const [translating, setTranslating] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const confirm = useConfirm();
   const fullyTranslated = book.translatedChapters >= book.totalChapters && book.totalChapters > 0;
   const hasPending = (book.pendingTranslations ?? 0) > 0;
 
@@ -102,7 +104,13 @@ export function BookCard({
   };
 
   const handleCancel = async () => {
-    if (!confirm(`Cancel ${book.pendingTranslations} pending translation(s) for this book? In-flight calls can't be stopped but their results will be discarded.`)) return;
+    if (!(await confirm({
+      title: `Cancel ${book.pendingTranslations} pending translation(s)?`,
+      description: "In-flight calls can't be stopped but their results will be discarded.",
+      confirmText: "Cancel translations",
+      cancelText: "Keep running",
+      destructive: true,
+    }))) return;
     setCancelling(true);
     try {
       const res = await fetch(`/api/books/${book.id}/translate-cancel`, { method: "POST" });
@@ -293,8 +301,14 @@ export function BookCard({
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="text-destructive focus:text-destructive"
-                  onClick={() => {
-                    if (confirm("Delete this book and all translations?")) onDelete(book.id);
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: `Delete "${book.title}"?`,
+                      description: "The book and all its translations will be removed. This can't be undone.",
+                      confirmText: "Delete",
+                      destructive: true,
+                    });
+                    if (ok) onDelete(book.id);
                   }}
                 >
                   Delete

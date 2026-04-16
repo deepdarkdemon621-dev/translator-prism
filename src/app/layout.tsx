@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Noto_Serif_JP, Noto_Serif_SC, Fraunces } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import "./globals.css";
 
 const notoJp = Noto_Serif_JP({
@@ -60,7 +61,7 @@ export default function RootLayout({
         <body
           className={`${notoJp.variable} ${notoSc.variable} ${fraunces.variable} antialiased bg-background text-foreground`}
         >
-          {children}
+          <ConfirmProvider>{children}</ConfirmProvider>
         </body>
       </html>
     </ClerkProvider>

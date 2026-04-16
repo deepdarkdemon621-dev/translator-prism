@@ -7,6 +7,10 @@ import { translateAllWithGate } from "@/lib/translate/client";
 
 interface UploadZoneProps {
   onUploadComplete: () => void;
+  /** Collections the caller already has loaded. Kept as a prop so
+   *  newly-created collections in the parent appear in the dropdown
+   *  without a page refresh. */
+  collections: Array<{ id: string; name: string }>;
 }
 
 interface UploadedBook {
@@ -14,7 +18,7 @@ interface UploadedBook {
   title: string;
 }
 
-export function UploadZone({ onUploadComplete }: UploadZoneProps) {
+export function UploadZone({ onUploadComplete, collections }: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +38,6 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps) {
   const [visibility, setVisibility] = useState<"public" | "private">("public");
   // Destination collection for the upload. "" means top level.
   const [targetCollectionId, setTargetCollectionId] = useState<string>("");
-  const [ownCollections, setOwnCollections] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,22 +45,6 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps) {
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { isAdmin?: boolean } | null) => {
         if (!cancelled && data?.isAdmin) setIsAdmin(true);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    // /api/collections returns own + admin-public for regulars, all for
-    // admin. The server's upload handler silently drops a non-owned
-    // collectionId, so a loose filter here is fine.
-    fetch("/api/collections")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((rows: Array<{ id: string; name: string }>) => {
-        if (!cancelled) setOwnCollections(rows);
       })
       .catch(() => {});
     return () => {
@@ -218,7 +205,7 @@ export function UploadZone({ onUploadComplete }: UploadZoneProps) {
             onChange={(e) => setTargetCollectionId(e.target.value)}
           >
             <option value="">Top level</option>
-            {ownCollections.map((c) => (
+            {collections.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>
