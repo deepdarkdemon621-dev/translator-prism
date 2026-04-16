@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
 interface BookProgress {
   id: string;
@@ -15,6 +16,14 @@ interface BookProgress {
   doneChapters: number;
   totalChapters: number;
 }
+
+type LLMErrorCode =
+  | "quota_exhausted"
+  | "rate_limit"
+  | "auth_error"
+  | "model_not_found"
+  | "network"
+  | "unknown";
 
 interface ProgressResponse {
   overall: {
@@ -30,6 +39,12 @@ interface ProgressResponse {
     windowSeconds: number;
     etaSeconds: number | null;
   };
+  recentFailure: {
+    code: LLMErrorCode;
+    message: string;
+    at: string;
+  } | null;
+  activeProvider: string;
 }
 
 // Auto-refresh interval. 5s is fast enough to feel "live" while the worker
@@ -56,6 +71,8 @@ export default function ProgressPage() {
   const [data, setData] = useState<ProgressResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryMessage, setRetryMessage] = useState<string | null>(null);
   // Live-region toggle so screen readers re-announce the refresh even
   // when the numbers haven't changed. Not visible to sighted users.
   const tickRef = useRef(0);
@@ -83,6 +100,31 @@ export default function ProgressPage() {
     fetchProgress();
     const id = setInterval(fetchProgress, REFRESH_MS);
     return () => clearInterval(id);
+  }, [fetchProgress]);
+
+  const handleRetryFailed = useCallback(async () => {
+    setRetrying(true);
+    setRetryMessage(null);
+    try {
+      const res = await fetch("/api/translations/retry-failed", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        setRetryMessage(`Retry failed (${res.status})`);
+        return;
+      }
+      const json: { reset: number } = await res.json();
+      setRetryMessage(
+        json.reset === 0
+          ? "Nothing to retry."
+          : `Reset ${json.reset} failed translations to pending.`,
+      );
+      fetchProgress();
+    } catch (err) {
+      setRetryMessage(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setRetrying(false);
+    }
   }, [fetchProgress]);
 
   const overall = data?.overall;
@@ -124,6 +166,9 @@ export default function ProgressPage() {
                 Last: {lastUpdated.toLocaleTimeString()}
               </span>
             )}
+            {data?.activeProvider && (
+              <span className="ml-2">· Provider: {data.activeProvider}</span>
+            )}
           </p>
         </div>
       </header>
@@ -132,6 +177,10 @@ export default function ProgressPage() {
         <div className="mb-6 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
+      )}
+
+      {data?.recentFailure && (
+        <FailureBanner failure={data.recentFailure} />
       )}
 
       {!data && !error && (
@@ -168,12 +217,32 @@ export default function ProgressPage() {
                 </span>
               </div>
               <ProgressBar value={overallPct} />
-              <div className="flex flex-wrap gap-x-6 gap-y-1 mt-3 text-xs text-muted-foreground">
-                <span>
-                  Throughput: {data.throughput.recentDone} in last{" "}
-                  {Math.round(data.throughput.windowSeconds / 60)} min
-                </span>
-                <span>ETA: {formatEta(data.throughput.etaSeconds)}</span>
+              <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
+                <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+                  <span>
+                    Throughput: {data.throughput.recentDone} in last{" "}
+                    {Math.round(data.throughput.windowSeconds / 60)} min
+                  </span>
+                  <span>ETA: {formatEta(data.throughput.etaSeconds)}</span>
+                </div>
+                {overall!.failed > 0 && (
+                  <div className="flex items-center gap-3">
+                    {retryMessage && (
+                      <span className="text-xs text-muted-foreground">
+                        {retryMessage}
+                      </span>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRetryFailed}
+                      disabled={retrying}
+                      title="Reset every failed translation back to pending"
+                    >
+                      {retrying ? "Resetting…" : `Retry ${overall!.failed} failed`}
+                    </Button>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -201,6 +270,79 @@ export default function ProgressPage() {
       )}
     </div>
   );
+}
+
+function FailureBanner({
+  failure,
+}: {
+  failure: { code: LLMErrorCode; message: string; at: string };
+}) {
+  // Tone by severity: quota/auth are blocking (amber), rate-limit/network
+  // are transient (muted). Unknown errors stay visible but muted —
+  // enough signal that something's wrong without crying wolf.
+  const { code } = failure;
+  const blocking =
+    code === "quota_exhausted" ||
+    code === "auth_error" ||
+    code === "model_not_found";
+  const toneClass = blocking
+    ? "border-amber-500/50 bg-amber-500/10 text-amber-900 dark:text-amber-200"
+    : "border-border/50 bg-muted/40 text-muted-foreground";
+
+  const headline = headlineFor(code);
+
+  return (
+    <div
+      className={`mb-6 rounded-lg border px-4 py-3 text-sm flex items-start gap-3 ${toneClass}`}
+      role="alert"
+    >
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="mt-0.5 shrink-0"
+        aria-hidden
+      >
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="8" x2="12" y2="12" />
+        <line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+      <div className="flex-1 min-w-0">
+        <div className="font-medium">{headline}</div>
+        {failure.message && (
+          <div className="text-xs opacity-80 mt-0.5 truncate">
+            {stripCodePrefix(failure.message)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function headlineFor(code: LLMErrorCode): string {
+  switch (code) {
+    case "quota_exhausted":
+      return "API 额度不够 — 请充值后点 Retry failed";
+    case "auth_error":
+      return "API key 无效 — 请到 Settings 更新";
+    case "model_not_found":
+      return "模型未找到 — 请到 Settings 检查 model 名";
+    case "rate_limit":
+      return "被限流 — 稍等后点 Retry failed";
+    case "network":
+      return "网络错误 — 检查 Ollama / 网络连接";
+    default:
+      return "最近有翻译失败";
+  }
+}
+
+function stripCodePrefix(message: string): string {
+  return message.replace(/^\[[a-z_]+\]\s*/, "");
 }
 
 function StatCard({

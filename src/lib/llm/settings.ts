@@ -8,6 +8,10 @@ export interface LLMSettings {
   concurrency: number;
   baseURL?: string;
   model?: string;
+  /** Set when the caller wanted a paid provider but had no key, so we
+   *  silently dropped them onto local Ollama. Worker logs this once per
+   *  startup; UI can surface it too. */
+  fallbackReason?: string;
 }
 
 const APP_SETTINGS_KEY = "global";
@@ -22,19 +26,61 @@ interface StoredSettings {
   reading?: Record<string, unknown>;
 }
 
+const PAID_PROVIDERS = new Set(["claude", "openai", "openrouter"]);
+
 /**
- * Load LLM configuration. Priority order:
- * 1. LLM_PROVIDER / LLM_PROVIDER_BASE_URL / LLM_MODEL env vars (worker side)
- * 2. app_settings row in the DB (UI-driven; shared across replicas)
- * 3. Defaults
+ * Load LLM configuration. Priority:
+ * 1. DB `app_settings` row — what the user chose in /settings.
+ *    API key can be sourced from DB (user typed it) or env (pre-configured
+ *    ANTHROPIC_API_KEY / LLM_API_KEY).
+ *    Paid provider with no key anywhere → silent fallback to Ollama so the
+ *    worker keeps making progress instead of failing every row.
+ * 2. Env vars — bootstrap path when the DB is empty (first-run, tests).
+ * 3. Ollama default.
  *
- * For Claude, ANTHROPIC_API_KEY env takes precedence over DB.
- *
- * Historically backed by data/settings.json, but Vercel's read-only FS
- * silently dropped UI writes — moved to Turso so the admin's provider
- * choice actually persists.
+ * Previous versions put env first; that made UI changes ineffective on the
+ * worker machine (where .env.worker hard-codes LLM_PROVIDER). Flipping it
+ * means /settings is the source of truth, and env becomes a fallback.
  */
 export async function loadLLMSettings(): Promise<LLMSettings> {
+  const stored = await loadStoredSettings();
+  const dbProvider = stored.llm?.provider;
+
+  if (dbProvider) {
+    const concurrency = stored.llm?.concurrency ?? 2;
+    const model = stored.llm?.model;
+
+    // Resolve API key. DB wins; env covers the common case where the admin
+    // set ANTHROPIC_API_KEY on Vercel and picked "claude" in the UI without
+    // re-entering the key there.
+    let apiKey = stored.llm?.apiKey ?? "";
+    if (!apiKey) {
+      if (dbProvider === "claude" && process.env.ANTHROPIC_API_KEY) {
+        apiKey = process.env.ANTHROPIC_API_KEY;
+      } else if (process.env.LLM_API_KEY) {
+        apiKey = process.env.LLM_API_KEY;
+      }
+    }
+
+    // Graceful fallback: user picked a paid provider but no key is
+    // configured anywhere. Rather than failing every translation with
+    // "401 invalid api key", use local Ollama until they configure a key.
+    if (PAID_PROVIDERS.has(dbProvider) && !apiKey) {
+      return {
+        provider: "ollama",
+        apiKey: "",
+        concurrency,
+        model,
+        fallbackReason: `${dbProvider}: no API key configured, using local Ollama`,
+      };
+    }
+
+    return { provider: dbProvider, apiKey, concurrency, model };
+  }
+
+  // DB has no LLM row yet — bootstrap from env. This covers the worker's
+  // first boot against a fresh Turso DB and local-dev before the admin
+  // opens /settings.
   if (process.env.LLM_PROVIDER) {
     return {
       provider: process.env.LLM_PROVIDER,
@@ -44,24 +90,13 @@ export async function loadLLMSettings(): Promise<LLMSettings> {
       model: process.env.LLM_MODEL,
     };
   }
-  const stored = await loadStoredSettings();
-  const provider = stored.llm?.provider ?? "claude";
-  const apiKey =
-    provider === "claude" && process.env.ANTHROPIC_API_KEY
-      ? process.env.ANTHROPIC_API_KEY
-      : stored.llm?.apiKey ?? "";
-  return {
-    provider,
-    apiKey,
-    concurrency: stored.llm?.concurrency ?? 2,
-    model: stored.llm?.model,
-  };
+
+  return { provider: "ollama", apiKey: "", concurrency: 2 };
 }
 
 export async function getActiveProviderName(): Promise<string> {
-  if (process.env.LLM_PROVIDER) return process.env.LLM_PROVIDER;
-  const stored = await loadStoredSettings();
-  return stored.llm?.provider ?? "claude";
+  const s = await loadLLMSettings();
+  return s.provider;
 }
 
 export async function isLocalProvider(): Promise<boolean> {

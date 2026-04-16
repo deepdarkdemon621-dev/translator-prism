@@ -7,8 +7,10 @@ import {
   translations,
   users,
 } from "@/lib/db/schema";
-import { and, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
+import { parseErrorCode, type LLMErrorCode } from "@/lib/llm/errors";
+import { getActiveProviderName } from "@/lib/llm/settings";
 
 // 5-minute throughput window for ETA. Long enough to smooth out the gaps
 // between worker polls (every few seconds) and short enough to react when
@@ -65,6 +67,8 @@ export async function GET() {
         windowSeconds: THROUGHPUT_WINDOW_SECONDS,
         etaSeconds: null,
       },
+      recentFailure: null,
+      activeProvider: await getActiveProviderName(),
     });
   }
 
@@ -213,6 +217,42 @@ export async function GET() {
       return a.title.localeCompare(b.title);
     });
 
+  // Most recent failure within scope — lets the UI surface a "quota
+  // exhausted / API key invalid / etc." banner without having to NLP
+  // raw error strings. We only read one row (the freshest), so even
+  // heavy failure counts don't blow up the response size.
+  let recentFailure: {
+    code: LLMErrorCode;
+    message: string;
+    at: string;
+  } | null = null;
+  if (overall.failed > 0) {
+    const latestFailed = await db
+      .select({
+        errorMessage: translations.errorMessage,
+        updatedAt: translations.updatedAt,
+      })
+      .from(translations)
+      .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))
+      .innerJoin(chapters, eq(paragraphs.chapterId, chapters.id))
+      .where(
+        and(
+          inArray(chapters.bookId, bookIds),
+          eq(translations.status, "failed"),
+        ),
+      )
+      .orderBy(desc(translations.updatedAt))
+      .limit(1)
+      .get();
+    if (latestFailed) {
+      recentFailure = {
+        code: parseErrorCode(latestFailed.errorMessage),
+        message: latestFailed.errorMessage ?? "",
+        at: latestFailed.updatedAt,
+      };
+    }
+  }
+
   return NextResponse.json({
     overall,
     books: bookList,
@@ -221,5 +261,7 @@ export async function GET() {
       windowSeconds: THROUGHPUT_WINDOW_SECONDS,
       etaSeconds,
     },
+    recentFailure,
+    activeProvider: await getActiveProviderName(),
   });
 }
