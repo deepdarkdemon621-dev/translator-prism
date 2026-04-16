@@ -1,0 +1,5 @@
+data/
+scripts/
+.env*
+!.env.example
+!.env.worker.example
