@@ -72,59 +72,46 @@ export async function GET() {
     });
   }
 
-  // All three per-book / overall queries share this join shape. Turso
-  // handles a 4-table join on indexed FKs in single-digit ms even with
-  // tens of thousands of translations, so doing three passes is fine —
-  // simpler than a single SELECT with conditional aggregation and keeps
-  // the drizzle types honest.
-  const statusCounts = await db
+  // Per-book translation status tallies in a single query: SUM(CASE)
+  // collapses four separate GROUP BY rows (one per status) into one row
+  // per book, so we process ~1 row per book instead of up to 4.
+  // Dropping the books.id join here is safe — we already bounded the
+  // scope with bookIds above, so there's nothing for the books join to
+  // add. Relies on idx_translations_paragraph_status + idx_paragraphs_chapter_id
+  // + idx_chapters_book_id (migration 0009) to keep this from scanning.
+  const translationAgg = await db
     .select({
-      bookId: books.id,
-      status: translations.status,
-      count: sql<number>`COUNT(*)`,
+      bookId: chapters.bookId,
+      done: sql<number>`SUM(CASE WHEN ${translations.status} = 'done' THEN 1 ELSE 0 END)`,
+      pending: sql<number>`SUM(CASE WHEN ${translations.status} = 'pending' THEN 1 ELSE 0 END)`,
+      processing: sql<number>`SUM(CASE WHEN ${translations.status} = 'processing' THEN 1 ELSE 0 END)`,
+      failed: sql<number>`SUM(CASE WHEN ${translations.status} = 'failed' THEN 1 ELSE 0 END)`,
+      total: sql<number>`COUNT(*)`,
     })
     .from(translations)
     .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))
     .innerJoin(chapters, eq(paragraphs.chapterId, chapters.id))
-    .innerJoin(books, eq(chapters.bookId, books.id))
-    .where(inArray(books.id, bookIds))
-    .groupBy(books.id, translations.status)
+    .where(inArray(chapters.bookId, bookIds))
+    .groupBy(chapters.bookId)
     .all();
 
-  // Chapter-level tallies: a chapter counts as "done" once every text
-  // paragraph has a completed translation in at least one target lang.
-  // Using the books.status field instead would under-count because it
-  // doesn't flip to 'done' until the last target lang finishes — we want
-  // a softer "making progress" count.
-  const chapterTotals = await db
-    .select({ bookId: books.id, total: sql<number>`COUNT(*)` })
-    .from(chapters)
-    .innerJoin(books, eq(chapters.bookId, books.id))
-    .where(inArray(books.id, bookIds))
-    .groupBy(books.id)
-    .all();
-
-  const doneChapters = await db
-    .select({ bookId: books.id, done: sql<number>`COUNT(*)` })
-    .from(chapters)
-    .innerJoin(books, eq(chapters.bookId, books.id))
-    .where(and(inArray(books.id, bookIds), eq(chapters.status, "done")))
-    .groupBy(books.id)
-    .all();
-
-  // Book titles + cover paths for display. One query for every book the
-  // user can see (already scoped above), cheap. coverPath being non-null
-  // is the signal for whether to render the thumbnail vs. a fallback.
-  const bookMeta = await db
+  // Chapter counts + book metadata (title, cover) in one pass. LEFT JOIN
+  // so books with zero chapters still appear; SUM(CASE chapter.id IS NOT NULL)
+  // avoids counting the single NULL row LEFT JOIN produces for empty books.
+  // Replaces three previous queries (chapterTotals + doneChapters + bookMeta).
+  const bookAgg = await db
     .select({
       id: books.id,
       title: books.title,
       coverPath: books.coverPath,
+      totalChapters: sql<number>`SUM(CASE WHEN ${chapters.id} IS NOT NULL THEN 1 ELSE 0 END)`,
+      doneChapters: sql<number>`SUM(CASE WHEN ${chapters.status} = 'done' THEN 1 ELSE 0 END)`,
     })
     .from(books)
+    .leftJoin(chapters, eq(chapters.bookId, books.id))
     .where(inArray(books.id, bookIds))
+    .groupBy(books.id)
     .all();
-  const metaById = new Map(bookMeta.map((b) => [b.id, b]));
 
   // Shape per-book breakdown: { id, title, done, total, doneChapters,
   // totalChapters }. Books with no translations queued at all are
@@ -142,40 +129,28 @@ export async function GET() {
     totalChapters: number;
   };
   const byBookId = new Map<string, BookRow>();
-  const ensure = (id: string): BookRow => {
-    let row = byBookId.get(id);
-    if (!row) {
-      const meta = metaById.get(id);
-      row = {
-        id,
-        title: meta?.title ?? "(untitled)",
-        hasCover: !!meta?.coverPath,
-        done: 0,
-        pending: 0,
-        processing: 0,
-        failed: 0,
-        total: 0,
-        doneChapters: 0,
-        totalChapters: 0,
-      };
-      byBookId.set(id, row);
-    }
-    return row;
-  };
-  for (const r of statusCounts) {
-    const row = ensure(r.bookId);
-    const n = Number(r.count);
-    row.total += n;
-    if (r.status === "done") row.done += n;
-    else if (r.status === "pending") row.pending += n;
-    else if (r.status === "processing") row.processing += n;
-    else if (r.status === "failed") row.failed += n;
+  for (const r of bookAgg) {
+    byBookId.set(r.id, {
+      id: r.id,
+      title: r.title,
+      hasCover: !!r.coverPath,
+      done: 0,
+      pending: 0,
+      processing: 0,
+      failed: 0,
+      total: 0,
+      doneChapters: Number(r.doneChapters ?? 0),
+      totalChapters: Number(r.totalChapters ?? 0),
+    });
   }
-  for (const r of chapterTotals) {
-    ensure(r.bookId).totalChapters = Number(r.total);
-  }
-  for (const r of doneChapters) {
-    ensure(r.bookId).doneChapters = Number(r.done);
+  for (const r of translationAgg) {
+    const row = byBookId.get(r.bookId);
+    if (!row) continue;
+    row.done = Number(r.done ?? 0);
+    row.pending = Number(r.pending ?? 0);
+    row.processing = Number(r.processing ?? 0);
+    row.failed = Number(r.failed ?? 0);
+    row.total = Number(r.total ?? 0);
   }
 
   const overall = { done: 0, pending: 0, processing: 0, failed: 0, total: 0 };

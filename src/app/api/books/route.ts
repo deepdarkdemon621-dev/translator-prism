@@ -2,7 +2,7 @@ import { NextResponse, NextRequest } from "next/server";
 import { getDb } from "@/lib/db";
 import { ensureDataDir } from "@/lib/db/init";
 import { books, chapters, paragraphs, translations, users } from "@/lib/db/schema";
-import { desc, eq, and, count, or, inArray, isNull } from "drizzle-orm";
+import { desc, eq, and, or, inArray, isNull, sql } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
@@ -69,46 +69,54 @@ export async function GET(request: NextRequest) {
   // Count "done" chapters + pending/processing translations per book. The
   // pending count drives the Cancel button in the UI — it's non-zero
   // exactly when there is work the user could abort.
-  const booksWithProgress = await Promise.all(
-    allBooks.map(async (book) => {
-      const doneChapters = await db
-        .select({ count: count() })
-        .from(chapters)
-        .where(and(eq(chapters.bookId, book.id), eq(chapters.status, "done")))
-        .all();
+  //
+  // Previously this used Promise.all with three queries per book (done
+  // chapter count, paragraph ids fetch, pending translation count),
+  // producing ~3N+1 DB round-trips that scaled linearly with library
+  // size. Now it's two batched aggregations keyed by book_id regardless
+  // of N. Relies on idx_chapters_book_status + idx_translations_paragraph_status
+  // (migration 0009) so neither query needs a full-table scan.
+  const bookIds = allBooks.map((b) => b.id);
+  const doneByBook = new Map<string, number>();
+  const pendingByBook = new Map<string, number>();
+  if (bookIds.length) {
+    const doneRows = await db
+      .select({
+        bookId: chapters.bookId,
+        count: sql<number>`COUNT(*)`,
+      })
+      .from(chapters)
+      .where(
+        and(inArray(chapters.bookId, bookIds), eq(chapters.status, "done")),
+      )
+      .groupBy(chapters.bookId)
+      .all();
+    for (const r of doneRows) doneByBook.set(r.bookId, Number(r.count));
 
-      // Sub-select: paragraphs in this book → translations still in flight.
-      const paraIds = (
-        await db
-          .select({ id: paragraphs.id })
-          .from(paragraphs)
-          .innerJoin(chapters, eq(chapters.id, paragraphs.chapterId))
-          .where(eq(chapters.bookId, book.id))
-          .all()
-      ).map((p) => p.id);
+    const pendingRows = await db
+      .select({
+        bookId: chapters.bookId,
+        count: sql<number>`COUNT(*)`,
+      })
+      .from(translations)
+      .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))
+      .innerJoin(chapters, eq(paragraphs.chapterId, chapters.id))
+      .where(
+        and(
+          inArray(chapters.bookId, bookIds),
+          inArray(translations.status, ["pending", "processing"]),
+        ),
+      )
+      .groupBy(chapters.bookId)
+      .all();
+    for (const r of pendingRows) pendingByBook.set(r.bookId, Number(r.count));
+  }
 
-      const pendingCount = paraIds.length
-        ? (
-            await db
-              .select({ count: count() })
-              .from(translations)
-              .where(
-                and(
-                  inArray(translations.paragraphId, paraIds),
-                  inArray(translations.status, ["pending", "processing"]),
-                ),
-              )
-              .all()
-          )[0]?.count || 0
-        : 0;
-
-      return {
-        ...book,
-        translatedChapters: doneChapters[0]?.count || 0,
-        pendingTranslations: pendingCount,
-      };
-    }),
-  );
+  const booksWithProgress = allBooks.map((book) => ({
+    ...book,
+    translatedChapters: doneByBook.get(book.id) ?? 0,
+    pendingTranslations: pendingByBook.get(book.id) ?? 0,
+  }));
 
   return NextResponse.json(booksWithProgress);
 }
