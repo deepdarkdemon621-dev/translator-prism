@@ -8,6 +8,7 @@
 // fan out to multiple workers, add a `locked_until` lease column and only
 // reset rows whose lease has expired.
 import { config as loadEnv } from "dotenv";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 
 // Match the migrate.ts pattern: explicit-load priority files first, then
@@ -22,9 +23,53 @@ import { runTranslation } from "../src/lib/llm/executor";
 
 const POLL_INTERVAL = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 2000);
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? 2);
+const LOCK_FILE = path.join(process.cwd(), ".worker.lock");
 
 let shuttingDown = false;
 let inFlight = 0;
+
+// Enforce the SINGLE-WORKER INVARIANT at startup. Two workers running
+// against the same Turso DB double-billed both the LLM and the DB
+// row-read quota (each worker polls independently), so we exit fast
+// rather than silently coexist. Uses a PID file rather than a DB lease
+// to avoid adding a new table for a 20-line concern.
+function acquireLock() {
+  if (existsSync(LOCK_FILE)) {
+    const raw = readFileSync(LOCK_FILE, "utf8").trim();
+    const existingPid = Number(raw);
+    if (existingPid && existingPid !== process.pid) {
+      // Signal 0 is a no-op probe — throws if the PID is gone, returns
+      // silently if it's still alive. Works cross-platform.
+      try {
+        process.kill(existingPid, 0);
+        console.error(
+          `[worker] Another worker is already running (PID ${existingPid}).\n` +
+            `         Stop it first: 'npx pm2 stop prism-worker' or kill ${existingPid}.\n` +
+            `         If you are sure it crashed, delete ${LOCK_FILE} and retry.`,
+        );
+        process.exit(1);
+      } catch {
+        console.warn(
+          `[worker] Stale lock from dead PID ${existingPid} — reclaiming.`,
+        );
+      }
+    }
+  }
+  writeFileSync(LOCK_FILE, String(process.pid));
+}
+
+function releaseLock() {
+  try {
+    if (!existsSync(LOCK_FILE)) return;
+    const pid = Number(readFileSync(LOCK_FILE, "utf8").trim());
+    // Only delete if the file still points at us — a new worker that
+    // reclaimed a stale lock must not be unlinked by the old one's
+    // exit handler.
+    if (pid === process.pid) unlinkSync(LOCK_FILE);
+  } catch {
+    // best effort
+  }
+}
 
 function requestShutdown(signal: string) {
   if (shuttingDown) return;
@@ -36,6 +81,11 @@ process.on("SIGINT", () => requestShutdown("SIGINT"));
 // PM2 sends SIGINT then SIGKILL by default, but defending against SIGTERM
 // (Docker, kill default) is essentially free and keeps shutdown graceful.
 process.on("SIGTERM", () => requestShutdown("SIGTERM"));
+// 'exit' fires on both clean exit and uncaught throws — best-effort
+// unlink so a successor doesn't have to step over a stale lock.
+process.on("exit", releaseLock);
+
+acquireLock();
 
 async function claimOne(): Promise<string | null> {
   const client = getLibsqlClient();

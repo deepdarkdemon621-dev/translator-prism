@@ -90,5 +90,8 @@ tmp/
 temp/
 *.tmp
 
+# worker singleton lock (PID file, local-only)
+.worker.lock
+
 
 .vercel
