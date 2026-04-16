@@ -48,11 +48,6 @@ interface ProgressResponse {
   activeProvider: string;
 }
 
-// Auto-refresh interval. 5s is fast enough to feel "live" while the worker
-// is churning and slow enough that Turso isn't being hammered — each tick
-// is a handful of grouped counts, not full row fetches.
-const REFRESH_MS = 5000;
-
 function formatEta(seconds: number | null): string {
   if (seconds == null) return "—";
   if (seconds < 60) return `${seconds}s`;
@@ -72,6 +67,7 @@ export default function ProgressPage() {
   const [data, setData] = useState<ProgressResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryMessage, setRetryMessage] = useState<string | null>(null);
   // Live-region toggle so screen readers re-announce the refresh even
@@ -79,6 +75,7 @@ export default function ProgressPage() {
   const tickRef = useRef(0);
 
   const fetchProgress = useCallback(async () => {
+    setRefreshing(true);
     try {
       const res = await fetch("/api/translation-progress", {
         cache: "no-store",
@@ -94,13 +91,17 @@ export default function ProgressPage() {
       tickRef.current += 1;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setRefreshing(false);
     }
   }, []);
 
+  // Load once on mount. Auto-refresh was removed to stay under the Turso
+  // monthly row-read quota — a 5s poll on this page alone was burning
+  // ~2M reads/month. Users hit the Refresh button when they want a
+  // fresh snapshot.
   useEffect(() => {
     fetchProgress();
-    const id = setInterval(fetchProgress, REFRESH_MS);
-    return () => clearInterval(id);
   }, [fetchProgress]);
 
   const handleRetryFailed = useCallback(async () => {
@@ -161,17 +162,25 @@ export default function ProgressPage() {
             Translation Progress
           </h1>
           <p className="text-xs text-muted-foreground mt-1">
-            Auto-refreshes every {REFRESH_MS / 1000}s.
-            {lastUpdated && (
-              <span className="ml-1">
-                Last: {lastUpdated.toLocaleTimeString()}
-              </span>
+            {lastUpdated ? (
+              <span>Last: {lastUpdated.toLocaleTimeString()}</span>
+            ) : (
+              <span>Loading…</span>
             )}
             {data?.activeProvider && (
               <span className="ml-2">· Provider: {data.activeProvider}</span>
             )}
           </p>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={fetchProgress}
+          disabled={refreshing}
+          title="Reload translation progress"
+        >
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </Button>
       </header>
 
       {error && (
