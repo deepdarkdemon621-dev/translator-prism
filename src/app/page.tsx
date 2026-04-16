@@ -383,6 +383,7 @@ export default function HomePage() {
             // stays open for all users inside the reader popover.
             { href: "/dictionary", label: "Dictionaries", adminOnly: true },
             { href: "/vocabulary", label: "Vocabulary", adminOnly: false },
+            { href: "/progress", label: "Progress", adminOnly: false },
             { href: "/settings", label: "Settings", adminOnly: false },
           ]
             .filter((item) => !item.adminOnly || isAdmin)
