@@ -75,12 +75,12 @@ export async function POST(request: NextRequest) {
       queued: 0,
       chaptersQueued: 0,
       totalBooks: myBooks.length,
-      provider: getActiveProviderName(),
+      provider: await getActiveProviderName(),
     });
   }
 
   const confirm = request.nextUrl.searchParams.get("confirm") === "1";
-  const local = isLocalProvider();
+  const local = await isLocalProvider();
 
   if (!local && !confirm) {
     let totalChars = 0;
@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       requiresConfirm: true,
-      provider: getActiveProviderName(),
+      provider: await getActiveProviderName(),
       totalBooks: myBooks.length,
       booksToQueue: Object.keys(byBook).length,
       chaptersToQueue: candidates.length,
@@ -127,6 +127,6 @@ export async function POST(request: NextRequest) {
     queued: totalQueued,
     chaptersQueued,
     totalBooks: myBooks.length,
-    provider: getActiveProviderName(),
+    provider: await getActiveProviderName(),
   });
 }

@@ -7,9 +7,9 @@ import type { LLMProvider } from "@/lib/llm/types";
 import { checkChapterDone } from "@/lib/chapter-status";
 
 let _provider: LLMProvider | null = null;
-function provider(): LLMProvider {
+async function provider(): Promise<LLMProvider> {
   if (!_provider) {
-    const s = loadLLMSettings();
+    const s = await loadLLMSettings();
     _provider = createProvider(s.provider, s.apiKey);
   }
   return _provider;
@@ -41,7 +41,7 @@ export async function runTranslation(translationId: string): Promise<void> {
   if (row.status === "cancelled") return;
 
   try {
-    const result = await provider().translate(
+    const result = await (await provider()).translate(
       row.sourceText,
       row.sourceLang,
       row.lang,

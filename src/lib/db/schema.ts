@@ -146,6 +146,17 @@ export const collections = sqliteTable("collections", {
   updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 
+// Single-row key/value store for app-wide settings (LLM provider config,
+// reading defaults). Historically backed by data/settings.json; moved to
+// the DB because Vercel's filesystem is read-only and the JSON writes
+// were silently dropping the user's provider selection in production.
+// 'key' is always 'global' for now; we may add per-user rows later.
+export const appSettings = sqliteTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
 // Paywall: presence of a row means "user has paid to translate/read this
 // chapter". Public books and admin users skip the check entirely — see
 // src/lib/billing. credits_spent is auditing only; the spend is computed

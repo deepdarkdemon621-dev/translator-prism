@@ -90,3 +90,5 @@ tmp/
 temp/
 *.tmp
 
+
+.vercel

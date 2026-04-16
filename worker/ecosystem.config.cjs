@@ -4,9 +4,10 @@ module.exports = {
   apps: [
     {
       name: "prism-worker",
-      script: "tsx",
+      script: "node_modules/tsx/dist/cli.mjs",
       args: "worker/index.ts",
       cwd: path.join(__dirname, ".."),
+      interpreter: "node",
       env_file: ".env.worker",
       autorestart: true,
       max_restarts: 50,

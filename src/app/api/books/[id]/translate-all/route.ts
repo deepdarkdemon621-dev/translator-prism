@@ -70,12 +70,12 @@ export async function POST(
       chaptersQueued: 0,
       chaptersSkippedLocked: lockedSkipped,
       totalChapters: candidateChapters.length,
-      provider: getActiveProviderName(),
+      provider: await getActiveProviderName(),
     });
   }
 
   const confirm = request.nextUrl.searchParams.get("confirm") === "1";
-  const local = isLocalProvider();
+  const local = await isLocalProvider();
 
   // Cost gate for paid providers. Compute total pending work across all
   // accessible chapters without queueing anything, so the user can decide
@@ -95,7 +95,7 @@ export async function POST(
 
     return NextResponse.json({
       requiresConfirm: true,
-      provider: getActiveProviderName(),
+      provider: await getActiveProviderName(),
       chaptersToQueue: accessibleChapters.length,
       chaptersSkippedLocked: lockedSkipped,
       totalChapters: candidateChapters.length,
@@ -119,6 +119,6 @@ export async function POST(
     chaptersQueued,
     chaptersSkippedLocked: lockedSkipped,
     totalChapters: candidateChapters.length,
-    provider: getActiveProviderName(),
+    provider: await getActiveProviderName(),
   });
 }

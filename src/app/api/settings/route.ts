@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs/promises";
-import path from "path";
 import { getCurrentUser } from "@/lib/auth";
-
-const SETTINGS_PATH = path.join(process.cwd(), "data", "settings.json");
+import { loadStoredSettings, saveStoredSettings } from "@/lib/llm/settings";
 
 const DEFAULT_SETTINGS = {
   llm: {
@@ -25,13 +22,23 @@ const DEFAULT_SETTINGS = {
   },
 };
 
-async function loadSettings() {
-  try {
-    const data = await fs.readFile(SETTINGS_PATH, "utf-8");
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
+type Settings = typeof DEFAULT_SETTINGS;
+
+async function loadSettings(): Promise<Settings> {
+  const stored = await loadStoredSettings();
+  return {
+    ...DEFAULT_SETTINGS,
+    ...stored,
+    llm: { ...DEFAULT_SETTINGS.llm, ...(stored.llm ?? {}) },
+    reading: {
+      ...DEFAULT_SETTINGS.reading,
+      ...(stored.reading ?? {}),
+      fonts: {
+        ...DEFAULT_SETTINGS.reading.fonts,
+        ...((stored.reading as { fonts?: Record<string, string> } | undefined)?.fonts ?? {}),
+      },
+    },
+  };
 }
 
 export async function GET() {
@@ -42,7 +49,6 @@ export async function GET() {
     return NextResponse.json({ error: "Not authorized" }, { status: 403 });
   }
   const settings = await loadSettings();
-  // Don't expose API key fully
   return NextResponse.json({
     ...settings,
     llm: {
@@ -61,7 +67,7 @@ export async function PUT(request: NextRequest) {
   const current = await loadSettings();
 
   // Strip the masking sentinel so clients can round-trip GET→PUT without corrupting the real key
-  const incomingLlm = { ...body.llm };
+  const incomingLlm = { ...(body.llm ?? {}) };
   if (incomingLlm.apiKey === "***configured***") {
     delete incomingLlm.apiKey;
   }
@@ -70,10 +76,14 @@ export async function PUT(request: NextRequest) {
     ...current,
     ...body,
     llm: { ...current.llm, ...incomingLlm },
-    reading: { ...current.reading, ...body.reading, fonts: { ...current.reading.fonts, ...body.reading?.fonts } },
+    reading: {
+      ...current.reading,
+      ...(body.reading ?? {}),
+      fonts: { ...current.reading.fonts, ...(body.reading?.fonts ?? {}) },
+    },
   };
 
-  await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
+  await saveStoredSettings(merged);
   // The worker reads settings on demand per job, so no in-process reset
   // is needed here. Settings changes take effect on the next job poll.
   return NextResponse.json({ success: true });
