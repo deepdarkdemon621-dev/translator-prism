@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 interface BookProgress {
   id: string;
   title: string;
+  hasCover: boolean;
   done: number;
   pending: number;
   processing: number;
@@ -402,20 +403,44 @@ function BookRow({ book }: { book: BookProgress }) {
   const p = pct(book.done, book.total);
   const active = book.pending + book.processing;
   return (
-    <div className="rounded-lg border border-border/50 bg-card/50 px-4 py-3">
-      <div className="flex items-baseline justify-between gap-4 mb-2">
-        <span className="text-sm font-medium truncate">{book.title}</span>
-        <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-          {book.done} / {book.total}
-          {book.failed > 0 && (
-            <span className="ml-2 text-destructive">· {book.failed} failed</span>
-          )}
-        </span>
+    <div className="flex items-stretch gap-3 rounded-lg border border-border/50 bg-card/50 px-3 py-3">
+      {/* Small 2:3 thumbnail — ~36px wide, shelf-friendly scale that
+          doesn't compete with the progress data. Falls back to a Fraunces
+          letter when the book has no cover uploaded. */}
+      <div className="relative w-9 sm:w-11 aspect-[2/3] shrink-0 overflow-hidden rounded bg-muted/40">
+        {book.hasCover ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={`/api/books/${book.id}/cover`}
+            alt=""
+            loading="lazy"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        ) : (
+          <div
+            className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground/60 select-none"
+            style={{ fontFamily: "var(--font-heading)" }}
+          >
+            {book.title.trim().charAt(0) || "?"}
+          </div>
+        )}
       </div>
-      <ProgressBar value={p} />
-      <div className="text-[11px] text-muted-foreground mt-1.5 tabular-nums">
-        {book.doneChapters} / {book.totalChapters} chapters
-        {active > 0 && <span className="ml-2">· {active} in flight</span>}
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline justify-between gap-4 mb-2">
+          <span className="text-sm font-medium truncate">{book.title}</span>
+          <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+            {book.done} / {book.total}
+            {book.failed > 0 && (
+              <span className="ml-2 text-destructive">· {book.failed} failed</span>
+            )}
+          </span>
+        </div>
+        <ProgressBar value={p} />
+        <div className="text-[11px] text-muted-foreground mt-1.5 tabular-nums">
+          {book.doneChapters} / {book.totalChapters} chapters
+          {active > 0 && <span className="ml-2">· {active} in flight</span>}
+        </div>
       </div>
     </div>
   );

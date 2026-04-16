@@ -23,24 +23,13 @@ interface LLMSettings {
   concurrency: number;
 }
 
-const MODELS: Record<string, string[]> = {
-  claude: [
-    "claude-sonnet-4-20250514",
-    "claude-haiku-4-5-20251001",
-  ],
-  openai: [
-    "gpt-4o",
-    "gpt-4o-mini",
-    "gpt-4-turbo",
-  ],
-  openrouter: [
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "anthropic/claude-sonnet-4-20250514",
-    "google/gemini-pro-1.5",
-    "deepseek/deepseek-chat",
-    "meta-llama/llama-3.3-70b-instruct",
-  ],
+// Fallback model hints used only when the live /api/llm/models fetch
+// fails (no API key saved yet, or 401). Once the user saves a key and
+// re-opens the dropdown, we fetch the real list from the provider.
+const FALLBACK_MODELS: Record<string, string[]> = {
+  claude: ["claude-sonnet-4-20250514", "claude-haiku-4-5-20251001"],
+  openai: ["gpt-4o", "gpt-4o-mini"],
+  openrouter: ["openai/gpt-4o-mini", "anthropic/claude-sonnet-4-20250514"],
   ollama: [],
 };
 
@@ -63,26 +52,43 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-  const [ollamaError, setOllamaError] = useState<string | null>(null);
+  // Dynamically fetched model list for the current provider — OpenAI,
+  // OpenRouter and Claude have /v1/models; Ollama uses /api/tags on the
+  // worker host. When empty, the UI falls back to FALLBACK_MODELS below.
+  const [liveModels, setLiveModels] = useState<string[]>([]);
+  const [modelFetchError, setModelFetchError] = useState<string | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(false);
   // Theme lives in localStorage via useReaderPrefs — shared with the reader's
   // own settings drawer, so flipping it here immediately updates the <html>
   // class and any mounted reader view.
   const { prefs, update: updatePrefs } = useReaderPrefs();
 
-  const fetchOllamaModels = useCallback(async () => {
-    setOllamaError(null);
+  // Fetch the model catalog for a given provider via our server proxy.
+  // The server uses the stored API key (or ollama/openrouter's public
+  // endpoint) so the browser never touches raw keys. Returns the list
+  // so callers can pick a sensible default when switching providers.
+  const fetchModelsFor = useCallback(async (providerName: string) => {
+    setModelFetchError(null);
+    setModelsLoading(true);
     try {
-      const res = await fetch("http://localhost:11434/api/tags");
-      if (!res.ok) throw new Error("Ollama not reachable");
-      const data = await res.json();
-      const names: string[] = (data.models ?? []).map((m: { name: string }) => m.name);
-      setOllamaModels(names);
-      return names;
-    } catch {
-      setOllamaError("无法连接 Ollama (localhost:11434)，请确认已启动");
-      setOllamaModels([]);
+      const res = await fetch(
+        `/api/llm/models?provider=${encodeURIComponent(providerName)}`,
+      );
+      if (!res.ok) {
+        setModelFetchError(`HTTP ${res.status}`);
+        setLiveModels([]);
+        return [];
+      }
+      const data: { models: string[]; error?: string } = await res.json();
+      if (data.error) setModelFetchError(data.error);
+      setLiveModels(data.models);
+      return data.models;
+    } catch (err) {
+      setModelFetchError(err instanceof Error ? err.message : "Network error");
+      setLiveModels([]);
       return [];
+    } finally {
+      setModelsLoading(false);
     }
   }, []);
 
@@ -104,14 +110,17 @@ export default function SettingsPage() {
       .then((data) => {
         if (data?.llm) {
           setLlm(data.llm);
-          if (data.llm.provider === "ollama") fetchOllamaModels();
+          // Fetch the live model list for whatever provider the DB has.
+          // If it fails (no key yet, network hiccup), the render path
+          // falls back to FALLBACK_MODELS so the dropdown isn't empty.
+          fetchModelsFor(data.llm.provider);
         }
       })
       .catch((err) => {
         if (err.name !== "AbortError") console.error("Failed to load settings", err);
       });
     return () => controller.abort();
-  }, [fetchOllamaModels]);
+  }, [fetchModelsFor]);
 
   const handleSave = async () => {
     const { apiKey: _ignored, ...llmWithoutKey } = llm;
@@ -129,6 +138,9 @@ export default function SettingsPage() {
         setSaveError(null);
         setApiKeyInput("");
         setTimeout(() => setSaved(false), 2000);
+        // Freshly-saved key likely unlocks a bigger model catalogue.
+        // Refetch so the Model dropdown picks up newly accessible models.
+        fetchModelsFor(llm.provider);
       } else {
         setSaveError("Save failed. Please try again.");
       }
@@ -208,14 +220,12 @@ export default function SettingsPage() {
               // Base UI Select can emit null on deselect — guard against corrupting state
               onValueChange={(v) => {
                 if (v !== null) {
-                  if (v === "ollama") {
-                    fetchOllamaModels().then((models) => {
-                      setLlm({ ...llm, provider: v, model: models[0] ?? "" });
-                    });
-                  } else {
-                    const firstModel = MODELS[v]?.[0] ?? "";
-                    setLlm({ ...llm, provider: v, model: firstModel });
-                  }
+                  fetchModelsFor(v).then((models) => {
+                    // Prefer live list; fall back to our static hints when
+                    // the live fetch came back empty (no key, etc.).
+                    const source = models.length > 0 ? models : FALLBACK_MODELS[v] ?? [];
+                    setLlm({ ...llm, provider: v, model: source[0] ?? "" });
+                  });
                 }
               }}
             >
@@ -231,7 +241,17 @@ export default function SettingsPage() {
           </div>
 
           <div>
-            <Label id="label-llm-model" className="mb-2 block">Model</Label>
+            <div className="flex items-center justify-between mb-2">
+              <Label id="label-llm-model">Model</Label>
+              <button
+                type="button"
+                onClick={() => fetchModelsFor(llm.provider)}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                disabled={modelsLoading}
+              >
+                {modelsLoading ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
             <Select
               value={llm.model}
               onValueChange={(v) => { if (v !== null) setLlm({ ...llm, model: v }); }}
@@ -240,16 +260,22 @@ export default function SettingsPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {(llm.provider === "ollama" ? ollamaModels : MODELS[llm.provider] || []).map((m) => (
+                {(liveModels.length > 0
+                  ? liveModels
+                  : FALLBACK_MODELS[llm.provider] || []
+                ).map((m) => (
                   <SelectItem key={m} value={m}>{m}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {modelFetchError && (
+              <p className="text-xs text-muted-foreground mt-1">
+                {modelFetchError}
+                {liveModels.length === 0 && (FALLBACK_MODELS[llm.provider]?.length ?? 0) > 0 &&
+                  " (showing fallback list)"}
+              </p>
+            )}
           </div>
-
-          {llm.provider === "ollama" && ollamaError && (
-            <p className="text-sm text-destructive">{ollamaError}</p>
-          )}
 
           {!LOCAL_PROVIDERS.has(llm.provider) && (
             <div>

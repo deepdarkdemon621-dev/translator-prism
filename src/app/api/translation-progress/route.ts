@@ -112,14 +112,19 @@ export async function GET() {
     .groupBy(books.id)
     .all();
 
-  // Book titles for display. One query for every book the user can see
-  // (already scoped above), cheap.
+  // Book titles + cover paths for display. One query for every book the
+  // user can see (already scoped above), cheap. coverPath being non-null
+  // is the signal for whether to render the thumbnail vs. a fallback.
   const bookMeta = await db
-    .select({ id: books.id, title: books.title })
+    .select({
+      id: books.id,
+      title: books.title,
+      coverPath: books.coverPath,
+    })
     .from(books)
     .where(inArray(books.id, bookIds))
     .all();
-  const titleById = new Map(bookMeta.map((b) => [b.id, b.title]));
+  const metaById = new Map(bookMeta.map((b) => [b.id, b]));
 
   // Shape per-book breakdown: { id, title, done, total, doneChapters,
   // totalChapters }. Books with no translations queued at all are
@@ -127,6 +132,7 @@ export async function GET() {
   type BookRow = {
     id: string;
     title: string;
+    hasCover: boolean;
     done: number;
     pending: number;
     processing: number;
@@ -139,9 +145,11 @@ export async function GET() {
   const ensure = (id: string): BookRow => {
     let row = byBookId.get(id);
     if (!row) {
+      const meta = metaById.get(id);
       row = {
         id,
-        title: titleById.get(id) ?? "(untitled)",
+        title: meta?.title ?? "(untitled)",
+        hasCover: !!meta?.coverPath,
         done: 0,
         pending: 0,
         processing: 0,
