@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { paragraphs, translations } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { loadChapterForRead } from "@/lib/access";
 
 export async function GET(
@@ -23,37 +23,37 @@ export async function GET(
     .orderBy(paragraphs.seq)
     .all();
 
-  const parasWithTranslations = await Promise.all(
-    paras.map(async (p) => {
-      const trans = await db
+  // Batch-fetch translations for every paragraph in one query instead of
+  // N sequential selects. For a 200-paragraph chapter this cuts DB
+  // roundtrips from 201 to 2 and dominates the reader's chapter-open time.
+  const paraIds = paras.map((p) => p.id);
+  const allTrans = paraIds.length > 0
+    ? await db
         .select()
         .from(translations)
-        .where(eq(translations.paragraphId, p.id))
-        .all();
+        .where(inArray(translations.paragraphId, paraIds))
+        .all()
+    : [];
 
-      return {
-        ...p,
-        translations: trans.reduce(
-          (acc, t) => {
-            acc[t.lang] = {
-              text: t.text,
-              status: t.status,
-              errorMessage: t.errorMessage,
-            };
-            return acc;
-          },
-          {} as Record<
-            string,
-            {
-              text: string | null;
-              status: string;
-              errorMessage: string | null;
-            }
-          >,
-        ),
-      };
-    }),
-  );
+  type TransEntry = { text: string | null; status: string; errorMessage: string | null };
+  const transByPara = new Map<string, Record<string, TransEntry>>();
+  for (const t of allTrans) {
+    let bucket = transByPara.get(t.paragraphId);
+    if (!bucket) {
+      bucket = {};
+      transByPara.set(t.paragraphId, bucket);
+    }
+    bucket[t.lang] = {
+      text: t.text,
+      status: t.status,
+      errorMessage: t.errorMessage,
+    };
+  }
+
+  const parasWithTranslations = paras.map((p) => ({
+    ...p,
+    translations: transByPara.get(p.id) ?? {},
+  }));
 
   return NextResponse.json({
     ...chapter,

@@ -153,22 +153,40 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const firstChapterId = chapterRows[0]?.id;
-      if (firstChapterId && parsed.chapters[0]) {
-        const paragraphRows = parsed.chapters[0].paragraphs.map((p, j) => ({
-          id: randomUUID(),
-          chapterId: firstChapterId,
-          seq: j,
-          sourceText: p.text,
-          sourceMarkup:
-            p.kind === "image"
-              ? rewriteImageSrcs(p.markup, bookId)
-              : p.markup,
-          kind: p.kind,
-        }));
-        for (let i = 0; i < paragraphRows.length; i += 500) {
-          await tx.insert(paragraphs).values(paragraphRows.slice(i, i + 500));
+      // Extract paragraphs for EVERY chapter up front. parseEpub already
+      // walked every XHTML into paragraphs[] in memory, so this is just an
+      // insert — no extra parsing cost. Doing it eagerly means the reader
+      // can render text + images the moment a chapter is opened, without
+      // waiting for Translate to trigger the legacy lazy-extractor path.
+      const allParagraphRows: {
+        id: string;
+        chapterId: string;
+        seq: number;
+        sourceText: string;
+        sourceMarkup: string;
+        kind: "text" | "image";
+      }[] = [];
+      for (let ci = 0; ci < parsed.chapters.length; ci++) {
+        const chId = chapterRows[ci]?.id;
+        if (!chId) continue;
+        const parsedCh = parsed.chapters[ci];
+        for (let j = 0; j < parsedCh.paragraphs.length; j++) {
+          const p = parsedCh.paragraphs[j];
+          allParagraphRows.push({
+            id: randomUUID(),
+            chapterId: chId,
+            seq: j,
+            sourceText: p.text,
+            sourceMarkup:
+              p.kind === "image"
+                ? rewriteImageSrcs(p.markup, bookId)
+                : p.markup,
+            kind: p.kind,
+          });
         }
+      }
+      for (let i = 0; i < allParagraphRows.length; i += 500) {
+        await tx.insert(paragraphs).values(allParagraphRows.slice(i, i + 500));
       }
     });
 
