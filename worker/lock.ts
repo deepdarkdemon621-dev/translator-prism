@@ -82,6 +82,14 @@ async function handleExistingLock(
     return;
   }
 
+  if (!info.commandLine) {
+    throw new Error(
+      `[worker] Existing lock PID ${existingPid} is alive, but its command line cannot be read. ` +
+        `Cannot verify whether it is a worker, so refusing to start a second worker. ` +
+        `Stop PID ${existingPid} manually, or remove the stale lock after verifying it is not a worker.`,
+    );
+  }
+
   if (!isWorkerCommand(info.commandLine, cwd)) {
     console.warn(
       `[worker] Lock PID ${existingPid} is alive but is not this worker - reclaiming stale lock.`,
@@ -179,6 +187,12 @@ function readCommandLine(pid: number): string | undefined {
         { encoding: "utf8", windowsHide: true },
       ).trim();
     }
+
+    const psOutput = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+      windowsHide: true,
+    }).trim();
+    if (psOutput) return psOutput;
 
     return readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ").trim();
   } catch {

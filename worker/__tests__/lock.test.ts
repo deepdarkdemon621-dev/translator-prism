@@ -72,4 +72,21 @@ describe("acquireWorkerLock", () => {
     expect(setup.killed).toEqual([]);
     expect(JSON.parse(setup.getLock() ?? "{}")).toMatchObject({ pid: 5678 });
   });
+
+  it("refuses to reclaim a live lock when the command line cannot be read", async () => {
+    const setup = createDeps("1357");
+    setup.alive.add(1357);
+
+    await expect(
+      acquireWorkerLock({
+        lockFile: ".worker.lock",
+        currentPid: 5678,
+        cwd: "C:\\Programming\\translator",
+        deps: setup.deps,
+      }),
+    ).rejects.toThrow(/cannot verify/i);
+
+    expect(setup.killed).toEqual([]);
+    expect(setup.getLock()).toBe("1357");
+  });
 });
