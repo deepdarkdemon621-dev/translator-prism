@@ -1,14 +1,10 @@
 // SINGLE-WORKER INVARIANT
-// This worker is designed to run exactly once per project — on the user's
+// This worker is designed to run exactly once per project on the user's
 // local machine, supervised by PM2. `resetStaleProcessing()` below flips
 // EVERY row in 'processing' back to 'pending' on startup, which is only safe
-// under that assumption. Running a second worker against the same Turso
-// database would cause worker A's restart to steal worker B's in-flight rows,
-// leading to double-execution and wasted LLM spend. If we ever need to
-// fan out to multiple workers, add a `locked_until` lease column and only
-// reset rows whose lease has expired.
+// under that assumption. Startup lock handling stops a previous local worker
+// before this process begins polling.
 import { config as loadEnv } from "dotenv";
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import path from "path";
 
 // Match the migrate.ts pattern: explicit-load priority files first, then
@@ -20,6 +16,7 @@ loadEnv();
 
 import { getLibsqlClient } from "../src/lib/db";
 import { runTranslation } from "../src/lib/llm/executor";
+import { acquireWorkerLock, releaseWorkerLock } from "./lock";
 
 const POLL_INTERVAL = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 2000);
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? 2);
@@ -28,72 +25,19 @@ const LOCK_FILE = path.join(process.cwd(), ".worker.lock");
 let shuttingDown = false;
 let inFlight = 0;
 
-// Enforce the SINGLE-WORKER INVARIANT at startup. Two workers running
-// against the same Turso DB double-billed both the LLM and the DB
-// row-read quota (each worker polls independently), so we exit fast
-// rather than silently coexist. Uses a PID file rather than a DB lease
-// to avoid adding a new table for a 20-line concern.
-function acquireLock() {
-  if (existsSync(LOCK_FILE)) {
-    const raw = readFileSync(LOCK_FILE, "utf8").trim();
-    const existingPid = Number(raw);
-    if (existingPid && existingPid !== process.pid) {
-      // Signal 0 is a no-op probe — throws if the PID is gone, returns
-      // silently if it's still alive. Works cross-platform.
-      try {
-        process.kill(existingPid, 0);
-        console.error(
-          `[worker] Another worker is already running (PID ${existingPid}).\n` +
-            `         Stop it first: 'npx pm2 stop prism-worker' or kill ${existingPid}.\n` +
-            `         If you are sure it crashed, delete ${LOCK_FILE} and retry.`,
-        );
-        process.exit(1);
-      } catch {
-        console.warn(
-          `[worker] Stale lock from dead PID ${existingPid} — reclaiming.`,
-        );
-      }
-    }
-  }
-  writeFileSync(LOCK_FILE, String(process.pid));
-}
-
-function releaseLock() {
-  try {
-    if (!existsSync(LOCK_FILE)) return;
-    const pid = Number(readFileSync(LOCK_FILE, "utf8").trim());
-    // Only delete if the file still points at us — a new worker that
-    // reclaimed a stale lock must not be unlinked by the old one's
-    // exit handler.
-    if (pid === process.pid) unlinkSync(LOCK_FILE);
-  } catch {
-    // best effort
-  }
-}
-
 function requestShutdown(signal: string) {
   if (shuttingDown) return;
-  console.log(`[worker] ${signal} — finishing in-flight jobs then exiting`);
+  console.log(`[worker] ${signal} - finishing in-flight jobs then exiting`);
   shuttingDown = true;
 }
 
 process.on("SIGINT", () => requestShutdown("SIGINT"));
-// PM2 sends SIGINT then SIGKILL by default, but defending against SIGTERM
-// (Docker, kill default) is essentially free and keeps shutdown graceful.
 process.on("SIGTERM", () => requestShutdown("SIGTERM"));
-// 'exit' fires on both clean exit and uncaught throws — best-effort
-// unlink so a successor doesn't have to step over a stale lock.
-process.on("exit", releaseLock);
-
-acquireLock();
+process.on("exit", () => releaseWorkerLock(LOCK_FILE));
 
 async function claimOne(): Promise<string | null> {
   const client = getLibsqlClient();
   const now = new Date().toISOString();
-  // Atomic claim: subquery picks the oldest pending row, outer UPDATE flips
-  // it to processing in the same statement. RETURNING gives us the id back.
-  // libsql/SQLite serializes writes so two workers can't both grab the same
-  // row even when polling concurrently.
   const res = await client.execute({
     sql: `UPDATE translations
           SET status = 'processing', updated_at = ?
@@ -111,8 +55,6 @@ async function claimOne(): Promise<string | null> {
 }
 
 async function resetStaleProcessing(): Promise<void> {
-  // Previous-run cleanup: any row left in 'processing' belongs to a worker
-  // that died mid-job. Flip them back so this run can pick them up.
   const client = getLibsqlClient();
   const now = new Date().toISOString();
   const res = await client.execute({
@@ -125,6 +67,7 @@ async function resetStaleProcessing(): Promise<void> {
 }
 
 async function loop() {
+  await acquireWorkerLock({ lockFile: LOCK_FILE });
   await resetStaleProcessing();
   console.log(`[worker] Starting (poll=${POLL_INTERVAL}ms, concurrency=${CONCURRENCY})`);
 
@@ -152,7 +95,7 @@ async function loop() {
 }
 
 function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 loop().catch((err) => {

@@ -131,6 +131,10 @@ SELECT status, COUNT(*) FROM translations GROUP BY status;
 
 ## Single-worker deployment
 
+Local restarts now replace the previous local worker automatically. If the
+lock file points at an unrelated process because the PID was reused, the worker
+reclaims the lock without killing that process.
+
 Run exactly one worker per Turso database. On startup the worker flips every
 row in `processing` back to `pending` to recover from its own crashes — if a
 second worker were running against the same DB, this reset would steal rows
