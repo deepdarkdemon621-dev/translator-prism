@@ -47,7 +47,9 @@ function hashKey(key: string): string {
 
 /** Translate a single claimed row. Caller has already set its status to
  *  'processing' via an atomic UPDATE. */
-export async function runTranslation(translationId: string): Promise<void> {
+export type TranslationRunResult = "done" | "failed" | "skipped";
+
+export async function runTranslation(translationId: string): Promise<TranslationRunResult> {
   const db = getDb();
 
   const row = await db
@@ -67,8 +69,8 @@ export async function runTranslation(translationId: string): Promise<void> {
     .where(eq(translations.id, translationId))
     .get();
 
-  if (!row) return;
-  if (row.status === "cancelled") return;
+  if (!row) return "skipped";
+  if (row.status === "cancelled") return "skipped";
 
   try {
     const provider = await getProvider();
@@ -77,7 +79,7 @@ export async function runTranslation(translationId: string): Promise<void> {
       row.sourceLang,
       row.lang,
     );
-    await db
+    const updated = await db
       .update(translations)
       .set({
         text: result.text,
@@ -86,24 +88,32 @@ export async function runTranslation(translationId: string): Promise<void> {
         tokensUsed: result.tokensUsed,
         updatedAt: new Date().toISOString(),
       })
-      .where(and(eq(translations.id, translationId), ne(translations.status, "cancelled")));
+      .where(and(eq(translations.id, translationId), ne(translations.status, "cancelled")))
+      .returning({ id: translations.id })
+      .get();
+    if (!updated) return "skipped";
     await checkChapterDone(row.chapterId);
+    return "done";
   } catch (err) {
     // Classify before writing so the UI can parse [code] to decide
     // whether to show the quota banner. See src/lib/llm/errors.ts.
     const classified = classifyLLMError(err);
-    await db
+    const updated = await db
       .update(translations)
       .set({
         status: "failed",
         errorMessage: formatErrorMessage(classified),
         updatedAt: new Date().toISOString(),
       })
-      .where(and(eq(translations.id, translationId), ne(translations.status, "cancelled")));
+      .where(and(eq(translations.id, translationId), ne(translations.status, "cancelled")))
+      .returning({ id: translations.id })
+      .get();
+    if (!updated) return "skipped";
     try {
       await checkChapterDone(row.chapterId);
     } catch (chkErr) {
       console.error("[executor] checkChapterDone after failure threw:", chkErr);
     }
+    return "failed";
   }
 }

@@ -17,13 +17,18 @@ loadEnv();
 import { getLibsqlClient } from "../src/lib/db";
 import { runTranslation } from "../src/lib/llm/executor";
 import { acquireWorkerLock, releaseWorkerLock } from "./lock";
+import { createProgressTracker } from "./progress";
 
 const POLL_INTERVAL = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 2000);
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? 2);
+const PROGRESS_LOG_INTERVAL = Number(process.env.WORKER_PROGRESS_LOG_INTERVAL_MS ?? 300_000);
 const LOCK_FILE = path.join(process.cwd(), ".worker.lock");
 
 let shuttingDown = false;
 let inFlight = 0;
+let lastProgressLog = Date.now();
+let finalProgressLogged = false;
+const progress = createProgressTracker();
 
 function requestShutdown(signal: string) {
   if (shuttingDown) return;
@@ -66,24 +71,59 @@ async function resetStaleProcessing(): Promise<void> {
   }
 }
 
+async function getStatusCounts(): Promise<Record<string, number>> {
+  const client = getLibsqlClient();
+  const res = await client.execute(
+    "SELECT status, COUNT(*) c FROM translations GROUP BY status",
+  );
+  return Object.fromEntries(res.rows.map((row) => [String(row.status), Number(row.c)]));
+}
+
+function formatStatusCounts(prefix: string, counts: Record<string, number>): string {
+  return `${prefix} source=turso done=${counts.done ?? 0} pending=${counts.pending ?? 0} processing=${counts.processing ?? 0} failed=${counts.failed ?? 0}`;
+}
+
+function logMemoryProgress(force = false): void {
+  const now = Date.now();
+  if (!force && now - lastProgressLog < PROGRESS_LOG_INTERVAL) return;
+  console.log(progress.format());
+  lastProgressLog = now;
+}
+
+async function logFinalProgress(): Promise<void> {
+  const counts = await getStatusCounts();
+  console.log(formatStatusCounts("[worker] final progress", counts));
+}
+
 async function loop() {
   await acquireWorkerLock({ lockFile: LOCK_FILE });
   await resetStaleProcessing();
-  console.log(`[worker] Starting (poll=${POLL_INTERVAL}ms, concurrency=${CONCURRENCY})`);
+  console.log(`[worker] Starting (poll=${POLL_INTERVAL}ms, concurrency=${CONCURRENCY}, progressLog=${PROGRESS_LOG_INTERVAL}ms)`);
 
   while (!shuttingDown) {
+    logMemoryProgress();
     if (inFlight >= CONCURRENCY) {
       await sleep(POLL_INTERVAL);
       continue;
     }
     const id = await claimOne();
     if (!id) {
+      if (inFlight === 0 && !finalProgressLogged) {
+        await logFinalProgress();
+        finalProgressLogged = true;
+      }
       await sleep(POLL_INTERVAL);
       continue;
     }
+    finalProgressLogged = false;
     inFlight++;
+    progress.claimed();
     runTranslation(id)
-      .catch((err) => console.error(`[worker] runTranslation(${id}) threw:`, err))
+      .then((status) => progress.completed(status))
+      .catch((err) => {
+        progress.completed("failed");
+        console.error(`[worker] runTranslation(${id}) threw:`, err);
+      })
       .finally(() => {
         inFlight--;
       });

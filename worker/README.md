@@ -107,14 +107,34 @@ Play it safe: install `pm2-installer` once (Windows) or run `pm2 startup`
 
 ### Translation progress
 
-The worker doesn't log on success — only on errors. To check how much has
-been translated, run:
+The worker logs local progress every 5 minutes by default:
+
+```
+[worker] progress source=memory claimed=120 done=118 failed=1 skipped=0 inFlight=1
+```
+
+This line is based on the current worker process' in-memory counters, so it
+does not read Turso. When the worker drains the queue, it performs one final
+Turso aggregate and logs the authoritative totals:
+
+```
+[worker] final progress source=turso done=54874 pending=0 processing=0 failed=0
+```
+
+To change the local progress interval, set:
+
+```
+WORKER_PROGRESS_LOG_INTERVAL_MS=300000
+```
+
+To check the current Turso totals manually, run:
 
 ```
 npx tsx scripts/check-progress.mjs
 ```
 
 Output looks like:
+
 ```
 translations: [
   { status: 'done',       c: 342  },
