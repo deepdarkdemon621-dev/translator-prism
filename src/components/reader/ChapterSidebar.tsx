@@ -31,8 +31,8 @@ export function ChapterSidebar({
 }: ChapterSidebarProps) {
   return (
     <div
-      className={`border-r border-border/50 bg-sidebar/50 backdrop-blur-sm overflow-hidden transition-all duration-300 ease-out ${
-        isOpen ? "w-56 flex-shrink-0" : "w-0"
+      className={`fixed md:relative top-[49px] bottom-[37px] left-0 z-40 md:top-auto md:bottom-auto border-r border-border/50 bg-sidebar/95 md:bg-sidebar/50 backdrop-blur-sm overflow-hidden transition-all duration-300 ease-out ${
+        isOpen ? "w-56 flex-shrink-0 shadow-xl md:shadow-none" : "w-0"
       }`}
     >
       <ScrollArea className="h-full">

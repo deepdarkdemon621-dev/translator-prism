@@ -1,6 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
+import {
+  DEFAULT_LANG_ORDER,
+  normalizeLangOrder,
+  normalizeVisibleLangs,
+  type ReaderLang,
+} from "./language-selection";
 
 export interface ReaderPrefs {
   fontSize: number;
@@ -13,7 +19,8 @@ export interface ReaderPrefs {
   // langs render in the order given. Drag-to-reorder on column headers
   // writes back into this list. Defaults to ja → zh → en which matches
   // the pre-2026-04 behavior (primary use case is JA novels with ZH first).
-  langOrder: Array<"ja" | "zh" | "en">;
+  langOrder: ReaderLang[];
+  visibleLangs: ReaderLang[];
 }
 
 export const DEFAULT_READER_PREFS: ReaderPrefs = {
@@ -26,7 +33,8 @@ export const DEFAULT_READER_PREFS: ReaderPrefs = {
     zh: "var(--font-noto-sc), serif",
     en: "Georgia, serif",
   },
-  langOrder: ["ja", "zh", "en"],
+  langOrder: DEFAULT_LANG_ORDER,
+  visibleLangs: DEFAULT_LANG_ORDER,
 };
 
 const STORAGE_KEY = "reader-prefs.v1";
@@ -45,19 +53,13 @@ function parse(raw: string | null): ReaderPrefs {
   if (!raw) return DEFAULT_READER_PREFS;
   try {
     const parsed = JSON.parse(raw) as Partial<ReaderPrefs>;
-    // Validate langOrder: must be a permutation of ['ja','zh','en']. If a
-    // user somehow has a corrupt array (missing langs, duplicates), fall
-    // back to defaults rather than crash the reader.
-    const ALL: Array<"ja" | "zh" | "en"> = ["ja", "zh", "en"];
-    const order = Array.isArray(parsed.langOrder) && parsed.langOrder.length === 3
-      && ALL.every((l) => parsed.langOrder!.includes(l))
-      ? (parsed.langOrder as Array<"ja" | "zh" | "en">)
-      : DEFAULT_READER_PREFS.langOrder;
+    const order = normalizeLangOrder(parsed.langOrder);
     return {
       ...DEFAULT_READER_PREFS,
       ...parsed,
       fonts: { ...DEFAULT_READER_PREFS.fonts, ...(parsed.fonts ?? {}) },
       langOrder: order,
+      visibleLangs: normalizeVisibleLangs(parsed.visibleLangs, order),
     };
   } catch {
     return DEFAULT_READER_PREFS;

@@ -1,34 +1,39 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import type { ReaderLang } from "@/lib/reader/language-selection";
 import Link from "next/link";
-
-export type ViewMode = "single" | "dual" | "triple";
 
 interface TopBarProps {
   bookTitle: string;
   chapterTitle: string;
-  viewMode: ViewMode;
-  onViewModeChange: (mode: ViewMode) => void;
+  visibleLangs: ReaderLang[];
+  onToggleLanguage: (lang: ReaderLang) => void;
   onToggleSidebar: () => void;
   onOpenSettings: () => void;
   fontSize: number;
   onFontSizeChange: (delta: number) => void;
 }
 
+const LANGUAGE_OPTIONS: Array<{ lang: ReaderLang; label: string; title: string }> = [
+  { lang: "ja", label: "日", title: "Japanese" },
+  { lang: "zh", label: "中", title: "Chinese" },
+  { lang: "en", label: "EN", title: "English" },
+];
+
 export function TopBar({
   bookTitle,
   chapterTitle,
-  viewMode,
-  onViewModeChange,
+  visibleLangs,
+  onToggleLanguage,
   onToggleSidebar,
   onOpenSettings,
   fontSize,
   onFontSizeChange,
 }: TopBarProps) {
   return (
-    <div className="flex items-center justify-between px-5 py-2.5 bg-background/70 backdrop-blur-xl border-b border-border/50 text-sm animate-in fade-in slide-in-from-top-2 duration-500">
-      <div className="flex items-center gap-3 min-w-0">
+    <div className="flex items-center justify-between gap-3 px-3 sm:px-5 py-2.5 bg-background/70 backdrop-blur-xl border-b border-border/50 text-sm animate-in fade-in slide-in-from-top-2 duration-500">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <button
           onClick={onToggleSidebar}
           className="h-8 w-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
@@ -59,35 +64,45 @@ export function TopBar({
           </span>
           {chapterTitle && (
             <>
-              <span className="text-muted-foreground/50">·</span>
-              <span className="text-muted-foreground truncate text-xs">{chapterTitle}</span>
+              <span className="hidden sm:inline text-muted-foreground/50">/</span>
+              <span className="hidden sm:inline text-muted-foreground truncate text-xs">
+                {chapterTitle}
+              </span>
             </>
           )}
         </div>
       </div>
-      <div className="flex items-center gap-1">
-        <div className="flex items-center gap-0.5 rounded-full bg-muted/60 p-0.5">
-          {(["single", "dual", "triple"] as const).map((mode) => (
-            <button
-              key={mode}
-              onClick={() => onViewModeChange(mode)}
-              className={`text-xs h-7 px-3 rounded-full transition-all duration-200 font-medium ${
-                viewMode === mode
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {mode === "single" ? "単語" : mode === "dual" ? "二語" : "三語"}
-            </button>
-          ))}
+      <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-0.5 rounded-full bg-muted/60 p-0.5" aria-label="Visible languages">
+          {LANGUAGE_OPTIONS.map(({ lang, label, title }) => {
+            const isVisible = visibleLangs.includes(lang);
+            const isLastVisible = isVisible && visibleLangs.length === 1;
+            return (
+              <button
+                key={lang}
+                type="button"
+                onClick={() => onToggleLanguage(lang)}
+                disabled={isLastVisible}
+                title={isLastVisible ? `${title} is the last visible language` : title}
+                aria-pressed={isVisible}
+                className={`text-xs h-7 px-2.5 sm:px-3 rounded-full transition-all duration-200 font-medium ${
+                  isVisible
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground hover:bg-background/50"
+                } disabled:cursor-not-allowed disabled:opacity-70`}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
-        <div className="flex items-center gap-0.5 rounded-full bg-muted/60 p-0.5 ml-1">
+        <div className="hidden sm:flex items-center gap-0.5 rounded-full bg-muted/60 p-0.5 ml-1">
           <button
             onClick={() => onFontSizeChange(-1)}
             className="text-xs h-7 w-7 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground hover:bg-background transition-colors font-medium"
             aria-label="Decrease font size"
           >
-            A−
+            A-
           </button>
           <span
             className="text-[10px] text-muted-foreground tabular-nums px-1.5 min-w-[2ch] text-center"
@@ -106,7 +121,7 @@ export function TopBar({
         <Button
           size="sm"
           variant="ghost"
-          className="text-xs h-8 px-3 ml-1 text-muted-foreground hover:text-foreground"
+          className="text-xs h-8 px-2.5 sm:px-3 ml-0 sm:ml-1 text-muted-foreground hover:text-foreground"
           onClick={onOpenSettings}
           aria-label="Reader settings"
         >

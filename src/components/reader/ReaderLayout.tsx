@@ -1,13 +1,19 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { TopBar, ViewMode } from "./TopBar";
+import { TopBar } from "./TopBar";
 import { BottomBar } from "./BottomBar";
 import { ChapterSidebar } from "./ChapterSidebar";
 import { ColumnView } from "./ColumnView";
+import { MobileParagraphView } from "./MobileParagraphView";
 import { SettingsDrawer } from "./SettingsDrawer";
 import { WordLookupPopover, type WordSelection } from "./WordLookupPopover";
 import { useReaderPrefs } from "@/lib/reader/prefs";
+import {
+  orderVisibleLangs,
+  toggleVisibleLang,
+  type ReaderLang,
+} from "@/lib/reader/language-selection";
 
 interface Chapter {
   id: string;
@@ -44,12 +50,10 @@ interface ReaderLayoutProps {
 }
 
 const LANG_LABELS: Record<string, string> = {
-  ja: "日本語",
-  zh: "中文",
+  ja: "Japanese",
+  zh: "Chinese",
   en: "English",
 };
-
-type Lang = "ja" | "zh" | "en";
 
 const FONT_SIZE_MIN = 12;
 const FONT_SIZE_MAX = 28;
@@ -63,45 +67,73 @@ export function ReaderLayout({
 }: ReaderLayoutProps) {
   const [currentIndex, setCurrentIndex] = useState(initialChapterIndex);
   const [content, setContent] = useState<ChapterContent | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>("triple");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const [activeParagraphId, setActiveParagraphId] = useState<string | null>(null);
+  const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
   const { prefs: settings, setPrefs: setSettings, update: updateSettings } = useReaderPrefs();
   const [wordSelection, setWordSelection] = useState<WordSelection | null>(null);
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
 
   const currentChapter = chapters.find((ch) => ch.index === currentIndex);
+  const visibleLangs = orderVisibleLangs(
+    settings.visibleLangs,
+    settings.langOrder,
+    sourceLang,
+  );
 
-  // Determine which languages to show. Source is always first; the remaining
-  // two come from the user-configurable langOrder so drag-reordering a
-  // column here actually persists. visibleLangs is sliced by viewMode
-  // (single → just source, dual → source + 1 target, triple → all three).
-  const visibleLangs = (() => {
-    const targets = settings.langOrder.filter((l) => l !== sourceLang);
-    if (viewMode === "single") return [sourceLang];
-    if (viewMode === "dual") return [sourceLang, targets[0]];
-    return [sourceLang, ...targets];
-  })();
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 768px)");
+    const syncSidebar = () => setSidebarOpen(query.matches);
+    syncSidebar();
+    query.addEventListener("change", syncSidebar);
+    return () => query.removeEventListener("change", syncSidebar);
+  }, []);
 
-  // Swap two target langs in the persisted order. We only ever swap
-  // non-source columns — the source stays pinned at index 0 visually but
-  // its position inside langOrder doesn't matter for rendering.
+  const handleToggleLanguage = useCallback(
+    (lang: ReaderLang) => {
+      const anchorId = activeParagraphId || highlightedId || content?.paragraphs[0]?.id || null;
+      setPendingScrollId(anchorId);
+      updateSettings({
+        visibleLangs: toggleVisibleLang(settings.visibleLangs, lang, settings.langOrder),
+      });
+    },
+    [
+      activeParagraphId,
+      content?.paragraphs,
+      highlightedId,
+      settings.langOrder,
+      settings.visibleLangs,
+      updateSettings,
+    ],
+  );
+
   const swapLangs = useCallback(
     (a: string, b: string) => {
       if (a === b) return;
-      if (a === sourceLang || b === sourceLang) return;
-      const next = [...settings.langOrder] as Lang[];
-      const ia = next.indexOf(a as Lang);
-      const ib = next.indexOf(b as Lang);
+      const next = [...settings.langOrder];
+      const ia = next.indexOf(a as ReaderLang);
+      const ib = next.indexOf(b as ReaderLang);
       if (ia === -1 || ib === -1) return;
       [next[ia], next[ib]] = [next[ib], next[ia]];
       updateSettings({ langOrder: next });
     },
-    [settings.langOrder, sourceLang, updateSettings],
+    [settings.langOrder, updateSettings],
   );
 
-  // Fetch chapter content
+  useEffect(() => {
+    if (!pendingScrollId) return;
+    const frame = requestAnimationFrame(() => {
+      const nodes = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-reader-paragraph-id]"),
+      ).filter((node) => node.dataset.readerParagraphId === pendingScrollId);
+      nodes.forEach((node) => node.scrollIntoView({ block: "start" }));
+      setPendingScrollId(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pendingScrollId, visibleLangs]);
+
   const fetchContent = useCallback(async (chapterId: string) => {
     try {
       const res = await fetch(`/api/chapters/${chapterId}`);
@@ -115,12 +147,10 @@ export function ReaderLayout({
     }
   }, []);
 
-  // Trigger translation
   const triggerTranslation = useCallback(async (chapterId: string) => {
     await fetch(`/api/chapters/${chapterId}/translate`, { method: "POST" });
   }, []);
 
-  // Retry a single paragraph's failed translations
   const handleRetryParagraph = useCallback(
     async (paragraphId: string) => {
       setRetryingIds((prev) => {
@@ -146,42 +176,28 @@ export function ReaderLayout({
     [currentChapter, fetchContent],
   );
 
-  // Load chapter when index changes
   useEffect(() => {
     const ch = chapters.find((c) => c.index === currentIndex);
     if (!ch) return;
 
     fetchContent(ch.id).catch(() => {});
 
-    // Trigger translation if needed. "translating" is included because the
-    // in-memory queue is lost on server restart — re-calling translate is safe
-    // because the route skips paragraphs already marked done.
     if (ch.status === "pending" || ch.status === "error" || ch.status === "translating") {
       triggerTranslation(ch.id).catch(() => {});
     }
 
-    // Save progress
     fetch(`/api/progress/${bookId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chapterIndex: currentIndex }),
     }).catch(() => {});
 
-    // Prefetch next chapter
     const nextCh = chapters.find((c) => c.index === currentIndex + 1);
     if (nextCh && nextCh.status === "pending") {
       triggerTranslation(nextCh.id).catch(() => {});
     }
   }, [currentIndex, chapters, bookId, fetchContent, triggerTranslation]);
 
-  // Poll for translation status while the chapter is still progressing.
-  // Terminal states ("done", "error") stop polling — a user Retry re-sets
-  // the chapter to "translating" via the retry API, which restarts the loop.
-  //
-  // Suspends while the tab is hidden (Page Visibility API) so a reader
-  // left open in a background tab doesn't keep burning Turso row reads.
-  // Interval is 10s — 3s was more aggressive than translation latency
-  // requires and was the single largest consumer of reads per session.
   useEffect(() => {
     if (!currentChapter || !content) return;
     if (content.status === "done" || content.status === "error") return;
@@ -203,8 +219,6 @@ export function ReaderLayout({
     const handleVisibility = () => {
       if (document.hidden) stop();
       else {
-        // Reset stale data when we come back — user has been away, the
-        // translation may have finished without us noticing.
         tick();
         start();
       }
@@ -224,8 +238,8 @@ export function ReaderLayout({
       <TopBar
         bookTitle={bookTitle}
         chapterTitle={currentChapter?.title || ""}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
+        visibleLangs={visibleLangs}
+        onToggleLanguage={handleToggleLanguage}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         onOpenSettings={() => setSettingsOpen(true)}
         fontSize={settings.fontSize}
@@ -243,39 +257,58 @@ export function ReaderLayout({
         <ChapterSidebar
           chapters={chapters}
           currentIndex={currentIndex}
-          onSelect={setCurrentIndex}
+          onSelect={(index) => {
+            setCurrentIndex(index);
+            if (window.innerWidth < 768) setSidebarOpen(false);
+          }}
           isOpen={sidebarOpen}
         />
 
-        <div className="flex flex-1 overflow-hidden divide-x divide-border">
+        <div className="flex flex-1 overflow-hidden">
           {content && content.paragraphs.length > 0 ? (
-            visibleLangs.map((lang) => {
-              // Only non-source target columns are draggable, and only in
-              // triple view where there's actually a sibling to swap with.
-              // Dual view has a single target col — nothing to reorder.
-              const isTarget = lang !== sourceLang;
-              const canDrag = isTarget && viewMode === "triple";
-              return (
-                <ColumnView
-                  key={lang}
-                  lang={lang}
-                  label={LANG_LABELS[lang] || lang}
+            <>
+              <div className="hidden md:flex flex-1 overflow-hidden divide-x divide-border">
+                {visibleLangs.map((lang) => (
+                  <ColumnView
+                    key={lang}
+                    lang={lang}
+                    label={LANG_LABELS[lang] || lang}
+                    sourceLang={sourceLang}
+                    paragraphs={content.paragraphs}
+                    highlightedId={highlightedId}
+                    onParagraphClick={setHighlightedId}
+                    onActiveParagraphChange={setActiveParagraphId}
+                    onWordSelect={setWordSelection}
+                    onRetryParagraph={handleRetryParagraph}
+                    retryingIds={retryingIds}
+                    fontSize={settings.fontSize}
+                    lineHeight={settings.lineHeight}
+                    fontFamily={settings.fonts[lang] || "serif"}
+                    paragraphSpacing={settings.paragraphSpacing}
+                    draggable={visibleLangs.length > 1}
+                    onDropLang={(fromLang, toLang) => swapLangs(fromLang, toLang)}
+                  />
+                ))}
+              </div>
+              <div className="md:hidden flex flex-1 overflow-hidden">
+                <MobileParagraphView
                   sourceLang={sourceLang}
+                  visibleLangs={visibleLangs}
+                  labels={LANG_LABELS}
                   paragraphs={content.paragraphs}
                   highlightedId={highlightedId}
                   onParagraphClick={setHighlightedId}
+                  onActiveParagraphChange={setActiveParagraphId}
                   onWordSelect={setWordSelection}
                   onRetryParagraph={handleRetryParagraph}
                   retryingIds={retryingIds}
                   fontSize={settings.fontSize}
                   lineHeight={settings.lineHeight}
-                  fontFamily={settings.fonts[lang as keyof typeof settings.fonts] || "serif"}
+                  fonts={settings.fonts}
                   paragraphSpacing={settings.paragraphSpacing}
-                  draggable={canDrag}
-                  onDropLang={(fromLang, toLang) => swapLangs(fromLang, toLang)}
                 />
-              );
-            })
+              </div>
+            </>
           ) : (
             <div className="flex-1 flex items-center justify-center p-8">
               {content ? (
@@ -291,12 +324,12 @@ export function ReaderLayout({
                       onClick={() => setCurrentIndex((i) => Math.min(chapters.length - 1, i + 1))}
                       className="text-primary text-sm hover:underline"
                     >
-                      Skip to next chapter →
+                      Skip to next chapter
                     </button>
                   )}
                 </div>
               ) : (
-                <div className="text-muted-foreground text-sm">Loading…</div>
+                <div className="text-muted-foreground text-sm">Loading...</div>
               )}
             </div>
           )}
@@ -323,7 +356,6 @@ export function ReaderLayout({
           bookId={bookId}
           onClose={() => {
             setWordSelection(null);
-            // Clear the browser selection so the user doesn't see stale highlights.
             window.getSelection()?.removeAllRanges();
           }}
         />

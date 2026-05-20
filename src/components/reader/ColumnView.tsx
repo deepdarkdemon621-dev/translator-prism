@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { ParagraphBlock } from "./ParagraphBlock";
 import type { WordSelection } from "./WordLookupPopover";
 
@@ -28,6 +29,7 @@ interface ColumnViewProps {
   paragraphs: Paragraph[];
   highlightedId: string | null;
   onParagraphClick: (id: string) => void;
+  onActiveParagraphChange?: (id: string) => void;
   onWordSelect?: (selection: WordSelection) => void;
   onRetryParagraph?: (paragraphId: string) => void;
   retryingIds?: Set<string>;
@@ -54,6 +56,7 @@ export function ColumnView({
   paragraphs,
   highlightedId,
   onParagraphClick,
+  onActiveParagraphChange,
   onWordSelect,
   onRetryParagraph,
   retryingIds,
@@ -66,6 +69,27 @@ export function ColumnView({
   onDropLang,
 }: ColumnViewProps) {
   const isSourceColumn = lang === sourceLang;
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const root = scrollerRef.current;
+    if (!root || !onActiveParagraphChange) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        const id = visible[0]?.target.getAttribute("data-reader-paragraph-id");
+        if (id) onActiveParagraphChange(id);
+      },
+      { root, threshold: 0.2 },
+    );
+
+    const nodes = root.querySelectorAll("[data-reader-paragraph-id]");
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, [onActiveParagraphChange, paragraphs, lang]);
 
   const handleMouseUp = () => {
     if (!isSourceColumn || !onWordSelect) return;
@@ -92,6 +116,7 @@ export function ColumnView({
 
   return (
     <div
+      ref={scrollerRef}
       className="flex-1 px-8 py-8 overflow-y-auto animate-in fade-in duration-500"
       onMouseUp={handleMouseUp}
     >
@@ -137,7 +162,11 @@ export function ColumnView({
           if (p.kind === "image") {
             const src = p.sourceMarkup.match(/src="([^"]+)"/)?.[1];
             return (
-              <div key={p.id} className={SPACING_CLASS[paragraphSpacing]}>
+              <div
+                key={p.id}
+                className={SPACING_CLASS[paragraphSpacing]}
+                data-reader-paragraph-id={p.id}
+              >
                 {src ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={src} alt={p.sourceText} className="block mx-auto max-w-full h-auto" loading="lazy" />
@@ -154,7 +183,11 @@ export function ColumnView({
           const errorMessage = isSource ? null : p.translations[lang]?.errorMessage ?? null;
 
           return (
-            <div key={p.id} className={SPACING_CLASS[paragraphSpacing]}>
+            <div
+              key={p.id}
+              className={SPACING_CLASS[paragraphSpacing]}
+              data-reader-paragraph-id={p.id}
+            >
               <ParagraphBlock
                 id={p.id}
                 text={text}
