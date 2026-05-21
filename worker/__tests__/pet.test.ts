@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   PET_ACTIONS,
   choosePetAction,
   getPetFrames,
   getPetMode,
+  startWorkerPet,
 } from "../pet";
 
 describe("getPetMode", () => {
@@ -45,5 +46,64 @@ describe("choosePetAction", () => {
   it("can bias toward working and error actions", () => {
     expect(choosePetAction(() => 0, "working")).toBe("working");
     expect(choosePetAction(() => 0, "error")).toBe("error");
+  });
+});
+
+describe("startWorkerPet", () => {
+  it("does not write anything when disabled", () => {
+    const writes: string[] = [];
+    const pet = startWorkerPet({
+      env: { WORKER_PET: "0" },
+      isTTY: true,
+      write: (value) => writes.push(value),
+      setTimeoutFn: () => 1 as unknown as NodeJS.Timeout,
+      clearTimeoutFn: () => {},
+    });
+
+    pet.stop();
+
+    expect(writes).toEqual([]);
+  });
+
+  it("renders and clears a frame in animation mode", () => {
+    const writes: string[] = [];
+    const cleared: NodeJS.Timeout[] = [];
+    const timeout = 1 as unknown as NodeJS.Timeout;
+    const pet = startWorkerPet({
+      env: { WORKER_PET: "1" },
+      isTTY: false,
+      random: () => 0,
+      write: (value) => writes.push(value),
+      setTimeoutFn: vi.fn(() => timeout),
+      clearTimeoutFn: (handle) => cleared.push(handle),
+    });
+
+    pet.stop();
+
+    expect(writes.join("")).toContain("( o o )");
+    expect(writes.join("")).toContain("\u001b[");
+    expect(cleared).toEqual([timeout]);
+  });
+
+  it("lets worker activity bias the next action", () => {
+    const writes: string[] = [];
+    const timers: Array<() => void> = [];
+    const pet = startWorkerPet({
+      env: { WORKER_PET: "1" },
+      isTTY: false,
+      random: () => 0,
+      write: (value) => writes.push(value),
+      setTimeoutFn: (callback) => {
+        timers.push(callback);
+        return timers.length as unknown as NodeJS.Timeout;
+      },
+      clearTimeoutFn: () => {},
+    });
+
+    pet.notify("working");
+    timers.shift()?.();
+    pet.stop();
+
+    expect(writes.join("")).toContain("( > < )");
   });
 });

@@ -73,3 +73,103 @@ export function choosePetAction(
   const index = Math.min(Math.floor(random() * PET_ACTIONS.length), PET_ACTIONS.length - 1);
   return PET_ACTIONS[index];
 }
+
+export type WorkerPetEvent = "working" | "error";
+
+export interface WorkerPet {
+  notify(event: WorkerPetEvent): void;
+  stop(): void;
+}
+
+interface StartWorkerPetOptions {
+  env?: PetEnv;
+  isTTY?: boolean;
+  random?: () => number;
+  write?: (value: string) => void;
+  setTimeoutFn?: typeof setTimeout;
+  clearTimeoutFn?: typeof clearTimeout;
+}
+
+const FRAME_INTERVAL_MS = 240;
+const ACTION_DELAY_MIN_MS = 3_000;
+const ACTION_DELAY_SPREAD_MS = 5_000;
+
+export function startWorkerPet({
+  env = process.env,
+  isTTY = Boolean(process.stdout.isTTY),
+  random = Math.random,
+  write = (value) => process.stdout.write(value),
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+}: StartWorkerPetOptions = {}): WorkerPet {
+  if (getPetMode({ env, isTTY }) === "off") {
+    return { notify() {}, stop() {} };
+  }
+
+  let stopped = false;
+  let handle: NodeJS.Timeout | undefined;
+  let linesDrawn = 0;
+  let bias: PetBias | undefined;
+
+  const clear = () => {
+    if (linesDrawn === 0) return;
+    write(`\u001b[${linesDrawn}A\u001b[J`);
+    linesDrawn = 0;
+  };
+
+  const render = (frame: string) => {
+    clear();
+    const output = `[worker-pet]\n${frame}\n`;
+    write(output);
+    linesDrawn = output.split("\n").length - 1;
+  };
+
+  const schedule = (delay: number) => {
+    handle = setTimeoutFn(runAction, delay);
+  };
+
+  const runFrame = (frames: string[], index: number) => {
+    if (stopped) return;
+    render(frames[index]);
+    if (index + 1 < frames.length) {
+      handle = setTimeoutFn(() => runFrame(frames, index + 1), FRAME_INTERVAL_MS);
+      return;
+    }
+    const nextDelay = ACTION_DELAY_MIN_MS + Math.floor(random() * ACTION_DELAY_SPREAD_MS);
+    schedule(nextDelay);
+  };
+
+  const runAction = () => {
+    if (stopped) return;
+    const action = choosePetAction(random, bias);
+    bias = undefined;
+    runFrame(getPetFrames(action), 0);
+  };
+
+  const safeRunAction = () => {
+    try {
+      runAction();
+    } catch {
+      stopped = true;
+    }
+  };
+
+  safeRunAction();
+
+  return {
+    notify(event) {
+      bias = event;
+      if (handle) clearTimeoutFn(handle);
+      safeRunAction();
+    },
+    stop() {
+      stopped = true;
+      if (handle) clearTimeoutFn(handle);
+      try {
+        clear();
+      } catch {
+        // Pet rendering must never affect worker shutdown.
+      }
+    },
+  };
+}
