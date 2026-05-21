@@ -13,7 +13,13 @@ export type PetAction = (typeof PET_ACTIONS)[number];
 export type PetBias = "working" | "error";
 export type PetMode = "animate" | "off";
 
-type PetEnv = Pick<NodeJS.ProcessEnv, "WORKER_PET" | "CI">;
+type PetEnv = {
+  WORKER_PET?: string;
+  CI?: string;
+  [key: string]: string | undefined;
+};
+type SetTimeoutFn = (callback: () => void, delay: number) => NodeJS.Timeout;
+type ClearTimeoutFn = (handle: NodeJS.Timeout) => void;
 
 export function getPetMode({
   env = process.env,
@@ -86,8 +92,8 @@ interface StartWorkerPetOptions {
   isTTY?: boolean;
   random?: () => number;
   write?: (value: string) => void;
-  setTimeoutFn?: typeof setTimeout;
-  clearTimeoutFn?: typeof clearTimeout;
+  setTimeoutFn?: SetTimeoutFn;
+  clearTimeoutFn?: ClearTimeoutFn;
 }
 
 const FRAME_INTERVAL_MS = 240;
