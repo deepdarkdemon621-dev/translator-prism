@@ -17,6 +17,7 @@ loadEnv();
 import { getLibsqlClient } from "../src/lib/db";
 import { runTranslation } from "../src/lib/llm/executor";
 import { acquireWorkerLock, releaseWorkerLock } from "./lock";
+import { startWorkerPet, type WorkerPet } from "./pet";
 import { createProgressTracker } from "./progress";
 
 const POLL_INTERVAL = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 2000);
@@ -29,11 +30,13 @@ let inFlight = 0;
 let lastProgressLog = Date.now();
 let finalProgressLogged = false;
 const progress = createProgressTracker();
+let workerPet: WorkerPet | undefined;
 
 function requestShutdown(signal: string) {
   if (shuttingDown) return;
   console.log(`[worker] ${signal} - finishing in-flight jobs then exiting`);
   shuttingDown = true;
+  workerPet?.stop();
 }
 
 process.on("SIGINT", () => requestShutdown("SIGINT"));
@@ -99,6 +102,7 @@ async function loop() {
   await acquireWorkerLock({ lockFile: LOCK_FILE });
   await resetStaleProcessing();
   console.log(`[worker] Starting (poll=${POLL_INTERVAL}ms, concurrency=${CONCURRENCY}, progressLog=${PROGRESS_LOG_INTERVAL}ms)`);
+  workerPet = startWorkerPet();
 
   while (!shuttingDown) {
     logMemoryProgress();
@@ -116,12 +120,14 @@ async function loop() {
       continue;
     }
     finalProgressLogged = false;
+    workerPet?.notify("working");
     inFlight++;
     progress.claimed();
     runTranslation(id)
       .then((status) => progress.completed(status))
       .catch((err) => {
         progress.completed("failed");
+        workerPet?.notify("error");
         console.error(`[worker] runTranslation(${id}) threw:`, err);
       })
       .finally(() => {
@@ -131,6 +137,7 @@ async function loop() {
 
   while (inFlight > 0) await sleep(100);
   console.log("[worker] Shutdown complete");
+  workerPet?.stop();
   process.exit(0);
 }
 
@@ -139,6 +146,7 @@ function sleep(ms: number) {
 }
 
 loop().catch((err) => {
+  workerPet?.stop();
   console.error("[worker] Fatal:", err);
   process.exit(1);
 });

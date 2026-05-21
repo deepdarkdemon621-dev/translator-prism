@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   PET_ACTIONS,
@@ -105,5 +107,17 @@ describe("startWorkerPet", () => {
     pet.stop();
 
     expect(writes.join("")).toContain("( > < )");
+  });
+});
+
+describe("worker pet integration", () => {
+  it("starts, notifies, and stops the pet from the worker entrypoint", () => {
+    const entrypoint = readFileSync(path.join(process.cwd(), "worker/index.ts"), "utf8");
+
+    expect(entrypoint).toContain('import { startWorkerPet');
+    expect(entrypoint).toContain("workerPet = startWorkerPet()");
+    expect(entrypoint).toContain('workerPet?.notify("working")');
+    expect(entrypoint).toContain('workerPet?.notify("error")');
+    expect(entrypoint).toContain("workerPet?.stop()");
   });
 });
