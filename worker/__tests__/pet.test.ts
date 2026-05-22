@@ -27,14 +27,15 @@ describe("getPetMode", () => {
   });
 });
 
-describe("droplet ghost frames", () => {
+describe("cat frames", () => {
   it("defines non-empty frames for every action", () => {
     for (const action of PET_ACTIONS) {
       const frames = getPetFrames(action);
 
       expect(frames.length).toBeGreaterThan(0);
       expect(frames.every((frame) => frame.length > 0)).toBe(true);
-      expect(frames.every((frame) => frame.includes("'~~~'"))).toBe(true);
+      expect(frames.every((frame) => frame.includes("/\\_/\\") || frame.includes("/\\ /\\") || frame.includes("/\\_/\\"))).toBe(true);
+      expect(frames.every((frame) => frame.includes("= "))).toBe(true);
     }
   });
 });
@@ -82,7 +83,7 @@ describe("startWorkerPet", () => {
 
     pet.stop();
 
-    expect(writes.join("")).toContain("( o o )");
+    expect(writes.join("")).toContain("( o.o )");
     expect(writes.join("")).toContain("\u001b[");
     expect(cleared).toEqual([timeout]);
   });
@@ -106,7 +107,7 @@ describe("startWorkerPet", () => {
     timers.shift()?.();
     pet.stop();
 
-    expect(writes.join("")).toContain("( > < )");
+    expect(writes.join("")).toContain("( >.< )");
   });
 });
 

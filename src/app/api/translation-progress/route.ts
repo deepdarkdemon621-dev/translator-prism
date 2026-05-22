@@ -111,8 +111,8 @@ export async function GET() {
           WHERE p_text.chapter_id = ${chapters.id} AND p_text.kind = 'text'
         )
         AND EXISTS (
-          SELECT 1 FROM paragraphs p_image
-          WHERE p_image.chapter_id = ${chapters.id} AND p_image.kind = 'image'
+          SELECT 1 FROM paragraphs p_any
+          WHERE p_any.chapter_id = ${chapters.id}
         )
       ) THEN 1 ELSE 0 END)`,
     })

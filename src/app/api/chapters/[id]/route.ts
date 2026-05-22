@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 import { paragraphs, translations } from "@/lib/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { loadChapterForRead } from "@/lib/access";
-import { lazyExtractParagraphs } from "@/lib/translate/enqueue";
+import { ensureChapterImageSources, lazyExtractParagraphs } from "@/lib/translate/enqueue";
 
 export async function GET(
   _request: NextRequest,
@@ -32,6 +32,16 @@ export async function GET(
       .where(eq(paragraphs.chapterId, id))
       .orderBy(paragraphs.seq)
       .all();
+  } else if (paras.some((p) => p.kind === "image")) {
+    const repaired = await ensureChapterImageSources(id);
+    if (repaired > 0) {
+      paras = await db
+        .select()
+        .from(paragraphs)
+        .where(eq(paragraphs.chapterId, id))
+        .orderBy(paragraphs.seq)
+        .all();
+    }
   }
 
   // Batch-fetch translations for every paragraph in one query instead of

@@ -1,7 +1,9 @@
 import { getDb } from "@/lib/db";
-import { chapters, paragraphs, translations } from "@/lib/db/schema";
+import { books, chapters, paragraphs, translations } from "@/lib/db/schema";
+import { getUploadsStorage } from "@/lib/storage";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import type JSZipType from "jszip";
 
 const TARGET_LANGS: Record<string, string[]> = {
   ja: ["zh", "en"],
@@ -34,14 +36,14 @@ export async function enqueueChapterTranslations(
     .all();
 
   if (paras.length === 0) {
-    if (await markImageOnlyChapterDone(chapterId)) {
+    if (await markNonTranslatableOnlyChapterDone(chapterId)) {
       return { queued: 0, skippedDone: 0, totalParagraphs: 0, queuedChars: 0 };
     }
     paras = await lazyExtractParagraphs(chapterId);
   }
 
   if (paras.length === 0) {
-    await markImageOnlyChapterDone(chapterId);
+    await markNonTranslatableOnlyChapterDone(chapterId);
     return { queued: 0, skippedDone: 0, totalParagraphs: 0, queuedChars: 0 };
   }
 
@@ -142,7 +144,7 @@ export async function estimateChapterWork(
   const targetLangs = TARGET_LANGS[sourceLang] || ["zh", "en"];
 
   if (paras.length === 0) {
-    if (await isImageOnlyChapter(chapterId)) {
+    if (await isNonTranslatableOnlyChapter(chapterId)) {
       return { queuedChars: 0, queuedTranslations: 0 };
     }
     const chapter = await db
@@ -193,32 +195,201 @@ async function getParagraphKindCounts(chapterId: string) {
   const db = getDb();
   const row = await db
     .select({
+      totalCount: sql<number>`COUNT(*)`,
       textCount: sql<number>`SUM(CASE WHEN ${paragraphs.kind} = 'text' THEN 1 ELSE 0 END)`,
-      imageCount: sql<number>`SUM(CASE WHEN ${paragraphs.kind} = 'image' THEN 1 ELSE 0 END)`,
     })
     .from(paragraphs)
     .where(eq(paragraphs.chapterId, chapterId))
     .get();
 
   return {
+    totalCount: Number(row?.totalCount ?? 0),
     textCount: Number(row?.textCount ?? 0),
-    imageCount: Number(row?.imageCount ?? 0),
   };
 }
 
-async function isImageOnlyChapter(chapterId: string) {
-  const { textCount, imageCount } = await getParagraphKindCounts(chapterId);
-  return textCount === 0 && imageCount > 0;
+async function isNonTranslatableOnlyChapter(chapterId: string) {
+  const { totalCount, textCount } = await getParagraphKindCounts(chapterId);
+  return textCount === 0 && totalCount > 0;
 }
 
-async function markImageOnlyChapterDone(chapterId: string) {
-  if (!(await isImageOnlyChapter(chapterId))) return false;
+async function markNonTranslatableOnlyChapterDone(chapterId: string) {
+  if (!(await isNonTranslatableOnlyChapter(chapterId))) return false;
   await getDb()
     .update(chapters)
     .set({ status: "done", updatedAt: new Date().toISOString() })
     .where(eq(chapters.id, chapterId))
     .run();
   return true;
+}
+
+type ChapterRow = typeof chapters.$inferSelect;
+
+type LegacyImageResolver = {
+  bookId: string;
+  chapterDir: string;
+  zip: JSZipType;
+};
+
+function escapeAttr(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function resolveHref(baseDir: string, href: string) {
+  const cleanHref = href.split("#")[0]?.split("?")[0] ?? href;
+  const parts = (baseDir + cleanHref).split("/");
+  const out: string[] = [];
+  for (const part of parts) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      out.pop();
+      continue;
+    }
+    out.push(part);
+  }
+  return out.join("/");
+}
+
+function sanitizeImageFilename(href: string) {
+  const cleaned = href
+    .split("#")[0]
+    ?.split("?")[0]
+    ?.replace(/^\/+/, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned && cleaned.length > 0 ? cleaned : "image";
+}
+
+function isAlreadyServedImageSrc(src: string) {
+  return (
+    src.startsWith("/api/books/") ||
+    src.startsWith("data:") ||
+    /^[a-z][a-z0-9+.-]*:/i.test(src)
+  );
+}
+
+async function loadLegacyImageResolver(chapter: ChapterRow): Promise<LegacyImageResolver | null> {
+  const book = await getDb()
+    .select({ id: books.id, filePath: books.filePath })
+    .from(books)
+    .where(eq(books.id, chapter.bookId))
+    .get();
+  if (!book) return null;
+
+  const storage = getUploadsStorage();
+  const candidates = Array.from(
+    new Set([
+      book.filePath.replace(/^\/+/, ""),
+      `${book.id}.epub`,
+    ].filter(Boolean)),
+  );
+
+  let epubBytes: Buffer | null = null;
+  for (const key of candidates) {
+    try {
+      epubBytes = await storage.get(key);
+      break;
+    } catch {
+      // Try the next historical storage-key shape.
+    }
+  }
+  if (!epubBytes) return null;
+
+  const { default: JSZip } = await import("jszip");
+  const zip = await JSZip.loadAsync(epubBytes);
+  const chapterPath = await findChapterPath(zip, chapter.sourceHtml);
+  if (!chapterPath) return null;
+
+  return {
+    bookId: book.id,
+    chapterDir: chapterPath.substring(0, chapterPath.lastIndexOf("/") + 1),
+    zip,
+  };
+}
+
+async function findChapterPath(zip: JSZipType, sourceHtml: string) {
+  const normalizedSource = sourceHtml.replace(/\/api\/books\/[^"]+\/images\//g, "images/");
+  const htmlPaths: string[] = [];
+  for (const entryPath of Object.keys(zip.files)) {
+    const entry = zip.files[entryPath];
+    if (entry.dir || !/\.x?html?$/i.test(entryPath)) continue;
+    htmlPaths.push(entryPath);
+    const text = await entry.async("text");
+    if (text === sourceHtml || text === normalizedSource) return entryPath;
+  }
+  return htmlPaths.length === 1 ? htmlPaths[0] : null;
+}
+
+async function resolveStoredImageSrc(src: string, resolver: LegacyImageResolver | null) {
+  if (!resolver || isAlreadyServedImageSrc(src)) return src;
+  const resolved = resolveHref(resolver.chapterDir, src);
+  const file = resolver.zip.file(resolved);
+  if (!file) return src;
+
+  const filename = sanitizeImageFilename(resolved);
+  const bytes = Buffer.from(await file.async("uint8array"));
+  await getUploadsStorage().put(`${resolver.bookId}/images/${filename}`, bytes);
+  return `/api/books/${resolver.bookId}/images/${filename}`;
+}
+
+function extractImageSrc(markup: string) {
+  return (
+    markup.match(/\bsrc\s*=\s*(["'])(.*?)\1/i)?.[2] ??
+    markup.match(/\bsrc\s*=\s*([^\s>]+)/i)?.[1] ??
+    null
+  );
+}
+
+function replaceImageSrc(markup: string, src: string) {
+  const escaped = escapeAttr(src);
+  if (/\bsrc\s*=\s*(["'])(.*?)\1/i.test(markup)) {
+    return markup.replace(/\bsrc\s*=\s*(["'])(.*?)\1/i, `src="${escaped}"`);
+  }
+  if (/\bsrc\s*=\s*([^\s>]+)/i.test(markup)) {
+    return markup.replace(/\bsrc\s*=\s*([^\s>]+)/i, `src="${escaped}"`);
+  }
+  return `<img src="${escaped}" alt="">`;
+}
+
+export async function ensureChapterImageSources(chapterId: string) {
+  const db = getDb();
+  const chapter = await db
+    .select()
+    .from(chapters)
+    .where(eq(chapters.id, chapterId))
+    .get();
+  if (!chapter) return 0;
+
+  const rows = await db
+    .select()
+    .from(paragraphs)
+    .where(and(eq(paragraphs.chapterId, chapterId), eq(paragraphs.kind, "image")))
+    .all();
+  const candidates = rows
+    .map((row) => ({ row, src: extractImageSrc(row.sourceMarkup) }))
+    .filter((item): item is { row: typeof rows[number]; src: string } =>
+      Boolean(item.src && !isAlreadyServedImageSrc(item.src)),
+    );
+  if (candidates.length === 0) return 0;
+
+  const resolver = await loadLegacyImageResolver(chapter);
+  let updated = 0;
+  for (const { row, src } of candidates) {
+    const nextSrc = await resolveStoredImageSrc(src, resolver);
+    if (nextSrc === src) continue;
+    await db
+      .update(paragraphs)
+      .set({ sourceMarkup: replaceImageSrc(row.sourceMarkup, nextSrc) })
+      .where(eq(paragraphs.id, row.id))
+      .run();
+    updated++;
+  }
+  await markNonTranslatableOnlyChapterDone(chapterId);
+  return updated;
 }
 
 /**
@@ -250,13 +421,18 @@ export async function lazyExtractParagraphs(chapterId: string) {
   const cheerio = await import("cheerio");
   const $ = cheerio.load(chapter.sourceHtml, { xmlMode: true });
   const extracted: { text: string; markup: string; kind: "text" | "image" }[] = [];
+  let resolverPromise: Promise<LegacyImageResolver | null> | null = null;
+  const getResolver = () => {
+    resolverPromise ??= loadLegacyImageResolver(chapter);
+    return resolverPromise;
+  };
 
   const body = $("body").get(0);
   if (body) {
-    const walk = (
+    const walk = async (
       node: import("domhandler").Element,
       insideParagraph: boolean,
-    ): void => {
+    ): Promise<void> => {
       if (node.type !== "tag") return;
       const tag = node.tagName?.toLowerCase();
       if (tag === "p") {
@@ -267,7 +443,7 @@ export async function lazyExtractParagraphs(chapterId: string) {
           return;
         }
         for (const kid of $(node).contents().toArray()) {
-          walk(kid as import("domhandler").Element, false);
+          await walk(kid as import("domhandler").Element, false);
         }
         return;
       }
@@ -278,19 +454,17 @@ export async function lazyExtractParagraphs(chapterId: string) {
           $(node).attr("href");
         if (!src) return;
         const alt = ($(node).attr("alt") || "").trim();
-        const markup =
-          tag === "img"
-            ? $.html(node) || `<img src="${src}" alt="${alt}">`
-            : `<img src="${src}" alt="${alt}">`;
+        const storedSrc = await resolveStoredImageSrc(src, await getResolver());
+        const markup = `<img src="${escapeAttr(storedSrc)}" alt="${escapeAttr(alt)}">`;
         extracted.push({ text: alt, markup, kind: "image" });
         return;
       }
       for (const kid of $(node).contents().toArray()) {
-        walk(kid as import("domhandler").Element, insideParagraph || tag === "p");
+        await walk(kid as import("domhandler").Element, insideParagraph || tag === "p");
       }
     };
     for (const kid of $(body).contents().toArray()) {
-      walk(kid as import("domhandler").Element, false);
+      await walk(kid as import("domhandler").Element, false);
     }
   }
 
@@ -320,6 +494,7 @@ export async function lazyExtractParagraphs(chapterId: string) {
     });
   }
 
+  await markNonTranslatableOnlyChapterDone(chapterId);
   return selectTextParagraphs(chapterId);
 }
 

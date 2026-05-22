@@ -30,16 +30,16 @@ export async function checkChapterDone(chapterId: string) {
   } else if (total === 0) {
     const paraStats = await db
       .select({
+        totalCount: sql<number>`COUNT(*)`,
         textCount: sql<number>`SUM(CASE WHEN ${paragraphs.kind} = 'text' THEN 1 ELSE 0 END)`,
-        imageCount: sql<number>`SUM(CASE WHEN ${paragraphs.kind} = 'image' THEN 1 ELSE 0 END)`,
       })
       .from(paragraphs)
       .where(eq(paragraphs.chapterId, chapterId))
       .get();
 
+    const totalCount = Number(paraStats?.totalCount ?? 0);
     const textCount = Number(paraStats?.textCount ?? 0);
-    const imageCount = Number(paraStats?.imageCount ?? 0);
-    if (textCount === 0 && imageCount > 0) {
+    if (textCount === 0 && totalCount > 0) {
       await db
         .update(chapters)
         .set({ status: "done", updatedAt: new Date().toISOString() })
