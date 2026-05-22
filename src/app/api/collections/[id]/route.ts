@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { books, chapters, collections, paragraphs, translations } from "@/lib/db/schema";
-import { and, asc, count, eq, inArray } from "drizzle-orm";
+import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 import { loadCollectionForView, loadOwnedCollection } from "@/lib/collections";
 
@@ -50,9 +50,20 @@ export async function GET(
   const decorated = await Promise.all(
     rows.map(async (b) => {
       const doneRow = await db
-        .select({ n: count() })
+        .select({
+          n: sql<number>`SUM(CASE WHEN ${chapters.status} = 'done' OR (
+            NOT EXISTS (
+              SELECT 1 FROM paragraphs p_text
+              WHERE p_text.chapter_id = ${chapters.id} AND p_text.kind = 'text'
+            )
+            AND EXISTS (
+              SELECT 1 FROM paragraphs p_image
+              WHERE p_image.chapter_id = ${chapters.id} AND p_image.kind = 'image'
+            )
+          ) THEN 1 ELSE 0 END)`,
+        })
         .from(chapters)
-        .where(and(eq(chapters.bookId, b.id), eq(chapters.status, "done")))
+        .where(eq(chapters.bookId, b.id))
         .all();
 
       const paraIds = (

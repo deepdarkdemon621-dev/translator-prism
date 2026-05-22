@@ -292,8 +292,15 @@ export async function parseEpub(buffer: Buffer): Promise<ParsedEpub> {
           if (text.length > 0) {
             const markup = $ch.html(node) || "";
             paragraphs.push({ text, markup, kind: "text" });
+            // Don't descend further; nested <img> inside text paragraphs
+            // stays in markup.
+            return;
           }
-          // Don't descend further; nested <img> inside <p> stays in markup.
+          // Empty wrapper paragraphs are common around full-page images.
+          // Descend with image extraction enabled so image-only pages render.
+          for (const kid of $ch(node).contents().toArray()) {
+            await walk(kid as Element, false);
+          }
           return;
         }
         // <img> (HTML) and <image> (SVG) both become image rows. SVG's

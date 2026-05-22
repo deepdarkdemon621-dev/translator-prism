@@ -1,22 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  filterProgressBooks,
+  getAdjacentProgressPage,
+  getDefaultProgressFilter,
+  paginateProgressBooks,
+  type ProgressBookSummary,
+  type ProgressFilter,
+} from "@/lib/progress-view";
 
-interface BookProgress {
-  id: string;
-  title: string;
-  hasCover: boolean;
-  done: number;
-  pending: number;
-  processing: number;
-  failed: number;
-  total: number;
-  doneChapters: number;
-  totalChapters: number;
-}
+type BookProgress = ProgressBookSummary;
 
 type LLMErrorCode =
   | "quota_exhausted"
@@ -63,6 +60,8 @@ function pct(done: number, total: number): number {
   return (done / total) * 100;
 }
 
+const BOOKS_PAGE_SIZE = 10;
+
 export default function ProgressPage() {
   const [data, setData] = useState<ProgressResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +69,8 @@ export default function ProgressPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryMessage, setRetryMessage] = useState<string | null>(null);
+  const [bookFilter, setBookFilter] = useState<ProgressFilter>("active");
+  const [bookPage, setBookPage] = useState(1);
   // Live-region toggle so screen readers re-announce the refresh even
   // when the numbers haven't changed. Not visible to sighted users.
   const tickRef = useRef(0);
@@ -86,6 +87,9 @@ export default function ProgressPage() {
       }
       const json: ProgressResponse = await res.json();
       setData(json);
+      setBookFilter((current) =>
+        current === "active" ? getDefaultProgressFilter(json.books) : current,
+      );
       setError(null);
       setLastUpdated(new Date());
       tickRef.current += 1;
@@ -131,6 +135,36 @@ export default function ProgressPage() {
 
   const overall = data?.overall;
   const overallPct = overall ? pct(overall.done, overall.total) : 0;
+  const activeBookCount = data
+    ? filterProgressBooks(data.books, "active").length
+    : 0;
+  const failedBookCount = data
+    ? filterProgressBooks(data.books, "failed").length
+    : 0;
+  const effectiveBookFilter =
+    data && bookFilter === "active" && activeBookCount === 0
+      ? "all"
+      : bookFilter;
+  const filteredBooks = useMemo(
+    () =>
+      data
+        ? filterProgressBooks(data.books, effectiveBookFilter)
+        : [],
+    [data, effectiveBookFilter],
+  );
+  const pagedBooks = useMemo(
+    () => paginateProgressBooks(filteredBooks, bookPage, BOOKS_PAGE_SIZE),
+    [filteredBooks, bookPage],
+  );
+
+  useEffect(() => {
+    setBookPage(1);
+  }, [effectiveBookFilter]);
+
+  const chooseBookFilter = (filter: ProgressFilter) => {
+    setBookFilter(filter);
+    setBookPage(1);
+  };
 
   return (
     <div className="min-h-screen px-6 py-10 sm:py-14 max-w-4xl mx-auto">
@@ -258,17 +292,91 @@ export default function ProgressPage() {
           </Card>
 
           <section aria-label="Per-book breakdown" className="space-y-2">
-            <h2 className="text-xs uppercase tracking-[0.2em] text-muted-foreground mb-3">
-              By book
-            </h2>
+            <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                  By book
+                </h2>
+                {data.books.length > 0 && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Showing {pagedBooks.start}-{pagedBooks.end} of{" "}
+                    {filteredBooks.length}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
+                <FilterButton
+                  label={`Active (${activeBookCount})`}
+                  active={effectiveBookFilter === "active"}
+                  onClick={() => chooseBookFilter("active")}
+                  disabled={activeBookCount === 0}
+                />
+                <FilterButton
+                  label={`Failed (${failedBookCount})`}
+                  active={effectiveBookFilter === "failed"}
+                  onClick={() => chooseBookFilter("failed")}
+                  disabled={failedBookCount === 0}
+                />
+                <FilterButton
+                  label={`All (${data.books.length})`}
+                  active={effectiveBookFilter === "all"}
+                  onClick={() => chooseBookFilter("all")}
+                />
+              </div>
+            </div>
             {data.books.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No translations queued.
               </p>
+            ) : filteredBooks.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No books match this filter.
+              </p>
             ) : (
-              data.books.map((b) => (
-                <BookRow key={b.id} book={b} />
-              ))
+              <>
+                {pagedBooks.items.map((b) => (
+                  <BookRow key={b.id} book={b} />
+                ))}
+                {pagedBooks.totalPages > 1 && (
+                  <div className="flex items-center justify-between pt-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setBookPage(
+                          getAdjacentProgressPage(
+                            pagedBooks.page,
+                            pagedBooks.totalPages,
+                            -1,
+                          ),
+                        )
+                      }
+                      disabled={pagedBooks.page <= 1}
+                    >
+                      Previous
+                    </Button>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      Page {pagedBooks.page} / {pagedBooks.totalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setBookPage(
+                          getAdjacentProgressPage(
+                            pagedBooks.page,
+                            pagedBooks.totalPages,
+                            1,
+                          ),
+                        )
+                      }
+                      disabled={pagedBooks.page >= pagedBooks.totalPages}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </section>
 
@@ -279,6 +387,30 @@ export default function ProgressPage() {
         </>
       )}
     </div>
+  );
+}
+
+function FilterButton({
+  label,
+  active,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      variant={active ? "default" : "outline"}
+      size="sm"
+      disabled={disabled}
+      onClick={onClick}
+      className="h-7"
+    >
+      {label}
+    </Button>
   );
 }
 

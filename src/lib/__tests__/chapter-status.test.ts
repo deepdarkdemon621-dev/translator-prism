@@ -151,6 +151,20 @@ describe("checkChapterDone", () => {
     expect(await statusAfter(chapterId)).toBe("translating");
   });
 
+  it("marks image-only chapters done when there is no text to translate", async () => {
+    const chapterId = await seedChapter([]);
+    await db.insert(schema.paragraphs).values({
+      id: randomUUID(),
+      chapterId,
+      seq: 0,
+      sourceText: "",
+      sourceMarkup: '<img src="/api/books/b/images/p.jpg" alt="">',
+      kind: "image",
+    }).run();
+
+    expect(await statusAfter(chapterId)).toBe("done");
+  });
+
   it("checks chapter completion with one aggregate status read", async () => {
     const chapterId = await seedChapter(["done", "done", "done", "done"]);
     await statusAfter(chapterId);

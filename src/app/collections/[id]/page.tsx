@@ -394,8 +394,16 @@ export default function CollectionPage({
                   {book.author} · {LANG_LABELS[book.sourceLang] ?? book.sourceLang} · {book.translatedChapters}/{book.totalChapters}
                 </p>
               </div>
-              {!readOnly && !bookSelect.mode && (
+              {!bookSelect.mode && (
                 <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs px-3"
+                    nativeButton={false}
+                    render={<Link href={`/read/${book.id}`}>Read</Link>}
+                  />
+                  {!readOnly && (
+                    <>
                   <Button
                     variant="ghost"
                     size="icon-sm"
@@ -445,6 +453,8 @@ export default function CollectionPage({
                   >
                     Move out
                   </Button>
+                    </>
+                  )}
                 </div>
               )}
             </li>

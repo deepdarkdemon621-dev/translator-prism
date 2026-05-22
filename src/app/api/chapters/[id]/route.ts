@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { paragraphs, translations } from "@/lib/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { loadChapterForRead } from "@/lib/access";
+import { lazyExtractParagraphs } from "@/lib/translate/enqueue";
 
 export async function GET(
   _request: NextRequest,
@@ -16,12 +17,22 @@ export async function GET(
     return NextResponse.json({ error: "Chapter not found" }, { status: 404 });
   }
 
-  const paras = await db
+  let paras = await db
     .select()
     .from(paragraphs)
     .where(eq(paragraphs.chapterId, id))
     .orderBy(paragraphs.seq)
     .all();
+
+  if (paras.length === 0) {
+    await lazyExtractParagraphs(id);
+    paras = await db
+      .select()
+      .from(paragraphs)
+      .where(eq(paragraphs.chapterId, id))
+      .orderBy(paragraphs.seq)
+      .all();
+  }
 
   // Batch-fetch translations for every paragraph in one query instead of
   // N sequential selects. For a 200-paragraph chapter this cuts DB

@@ -111,6 +111,19 @@ describe("parseEpub image support", () => {
     expect(paras[1].alt).toBe("");
   });
 
+  it("emits an image row for images wrapped in otherwise empty paragraphs", async () => {
+    const buf = await buildEpub({
+      chapters: [`<p><img src="../images/plate.jpg" alt="plate"/></p>`],
+      imageFiles: { "images/plate.jpg": Buffer.from([0x1]) },
+    });
+    const parsed = await parseEpub(buf);
+    const paras = parsed.chapters[0].paragraphs;
+    expect(paras).toHaveLength(1);
+    expect(paras[0].kind).toBe("image");
+    expect(paras[0].alt).toBe("plate");
+    expect(paras[0].markup).toContain('src="images/plate.jpg"');
+  });
+
   it("dedups images referenced from multiple chapters", async () => {
     const buf = await buildEpub({
       chapters: [

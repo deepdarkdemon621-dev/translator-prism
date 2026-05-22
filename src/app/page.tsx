@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { UserButton } from "@clerk/nextjs";
+import { Menu } from "lucide-react";
 import { UploadZone } from "@/components/UploadZone";
 import { BookCard } from "@/components/BookCard";
 import { CollectionCard } from "@/components/CollectionCard";
@@ -25,6 +26,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
@@ -63,6 +65,7 @@ export default function HomePage() {
   const [sweeping, setSweeping] = useState(false);
   const [cancellingAll, setCancellingAll] = useState(false);
   const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const bookSelect = useSelection();
   const collectionSelect = useSelection();
   const confirm = useConfirm();
@@ -200,6 +203,15 @@ export default function HomePage() {
     }
   };
 
+  const navLinks = [
+    // Dictionaries: admin-only (install/manage surface). Lookup stays open
+    // for all users inside the reader popover.
+    { href: "/dictionary", label: "Dictionaries", adminOnly: true },
+    { href: "/vocabulary", label: "Vocabulary", adminOnly: false },
+    { href: "/progress", label: "Progress", adminOnly: false },
+    { href: "/settings", label: "Settings", adminOnly: false },
+  ].filter((item) => !item.adminOnly || isAdmin);
+
   const handleCreateCollection = async () => {
     const name = newName.trim();
     if (!name) return;
@@ -310,7 +322,7 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen px-6 py-10 sm:py-14 max-w-6xl mx-auto">
-      <header className="mb-12 flex items-start justify-between gap-6">
+      <header className="mb-12 flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
         <div className="animate-in fade-in slide-in-from-bottom-2 duration-700">
           <h1
             className="text-4xl sm:text-5xl font-medium tracking-tight"
@@ -325,7 +337,7 @@ export default function HomePage() {
             One book, many languages.
           </p>
         </div>
-        <nav className="flex items-center gap-1 text-sm animate-in fade-in duration-700 delay-100">
+        <nav className="hidden lg:flex items-center gap-1 text-sm animate-in fade-in duration-700 delay-100">
           <CreditsBadge />
           {/* Account menu — sign-out lives here. Clerk 7 drops the
               `afterSignOutUrl` prop; sign-out flows through middleware. */}
@@ -397,6 +409,66 @@ export default function HomePage() {
               </Link>
             ))}
         </nav>
+        <nav className="flex items-center justify-between gap-2 text-sm animate-in fade-in duration-700 delay-100 lg:hidden">
+          <div className="flex items-center gap-1">
+            <CreditsBadge />
+            <UserButton />
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  aria-label="Open navigation menu"
+                >
+                  <Menu />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" className="w-48">
+              {isAdmin && (
+                <>
+                  <DropdownMenuItem onClick={handleTranslateAllLibrary} disabled={sweeping}>
+                    {sweeping ? "Queueing..." : "Translate all"}
+                  </DropdownMenuItem>
+                  {books.some((b) => (b.pendingTranslations ?? 0) > 0) && (
+                    <DropdownMenuItem
+                      onClick={handleCancelAll}
+                      disabled={cancellingAll}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      {cancellingAll ? "Cancelling..." : "Cancel all"}
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    onClick={() => importInputRef.current?.click()}
+                    disabled={importing}
+                  >
+                    {importing ? "Importing..." : "Import"}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              {navLinks.map((item) => (
+                <DropdownMenuItem key={item.href} render={<Link href={item.href} />}>
+                  {item.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json,.prism.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleImport(f);
+              e.target.value = "";
+            }}
+          />
+        </nav>
       </header>
 
       <section className="mb-12 animate-in fade-in slide-in-from-bottom-3 duration-700 delay-150">
@@ -440,7 +512,7 @@ export default function HomePage() {
           <p className="text-sm text-muted-foreground italic"
             style={{ fontFamily: "var(--font-heading)" }}
           >
-            Group books into a series — the first book's cover becomes the shelf.
+            Group books into a series — the first book&apos;s cover becomes the shelf.
           </p>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-5">
