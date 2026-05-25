@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { buttonVariants } from "@/components/ui/button";
 import { PricingDialog } from "@/components/PricingDialog";
 import { translateAllWithGate } from "@/lib/translate/client";
+import { readJsonOrText } from "@/lib/http";
 
 interface UploadZoneProps {
   onUploadComplete: () => void;
@@ -76,9 +77,12 @@ export function UploadZone({ onUploadComplete, collections }: UploadZoneProps) {
           body: formData,
         });
 
-        const data = await res.json();
+        const data = await readJsonOrText<UploadedBook>(res);
         if (!res.ok) {
-          throw new Error(data.error || "Upload failed");
+          throw new Error("error" in data ? data.error : "Upload failed");
+        }
+        if ("error" in data) {
+          throw new Error(data.error);
         }
         // Admin skips the pricing gate — their translations go through the
         // translate-all cost gate instead, and showcase uploads shouldn't

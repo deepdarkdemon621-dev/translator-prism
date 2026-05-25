@@ -19,10 +19,14 @@ import { runTranslation } from "../src/lib/llm/executor";
 import { acquireWorkerLock, releaseWorkerLock } from "./lock";
 import { startWorkerPet, type WorkerPet } from "./pet";
 import { createProgressTracker } from "./progress";
+import { runRecoverableWorkerStep } from "./resilience";
 
 const POLL_INTERVAL = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 2000);
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? 2);
 const PROGRESS_LOG_INTERVAL = Number(process.env.WORKER_PROGRESS_LOG_INTERVAL_MS ?? 300_000);
+const RECOVERABLE_ERROR_RETRY_DELAY = Number(
+  process.env.WORKER_RECOVERABLE_ERROR_RETRY_DELAY_MS ?? 30_000,
+);
 const LOCK_FILE = path.join(process.cwd(), ".worker.lock");
 
 let shuttingDown = false;
@@ -98,9 +102,40 @@ async function logFinalProgress(): Promise<void> {
   console.log(formatStatusCounts("[worker] final progress", counts));
 }
 
+function logRecoverableWorkerError(
+  label: string,
+  err: unknown,
+  retryDelayMs: number,
+): void {
+  workerPet?.notify("error");
+  console.warn(
+    `[worker] Recoverable infrastructure error during ${label}; retrying in ${retryDelayMs}ms:`,
+    err,
+  );
+}
+
+async function runRecoverableStep<T>(
+  label: string,
+  operation: () => Promise<T>,
+) {
+  return runRecoverableWorkerStep({
+    label,
+    operation,
+    onRecoverableError: logRecoverableWorkerError,
+    retryDelayMs: RECOVERABLE_ERROR_RETRY_DELAY,
+    sleep,
+  });
+}
+
 async function loop() {
   await acquireWorkerLock({ lockFile: LOCK_FILE });
-  await resetStaleProcessing();
+  while (!shuttingDown) {
+    const resetResult = await runRecoverableStep(
+      "resetStaleProcessing",
+      resetStaleProcessing,
+    );
+    if (resetResult.ok) break;
+  }
   console.log(`[worker] Starting (poll=${POLL_INTERVAL}ms, concurrency=${CONCURRENCY}, progressLog=${PROGRESS_LOG_INTERVAL}ms)`);
   workerPet = startWorkerPet();
 
@@ -110,10 +145,16 @@ async function loop() {
       await sleep(POLL_INTERVAL);
       continue;
     }
-    const id = await claimOne();
+    const claimResult = await runRecoverableStep("claimOne", claimOne);
+    if (!claimResult.ok) continue;
+    const id = claimResult.value;
     if (!id) {
       if (inFlight === 0 && !finalProgressLogged) {
-        await logFinalProgress();
+        const finalProgressResult = await runRecoverableStep(
+          "logFinalProgress",
+          logFinalProgress,
+        );
+        if (!finalProgressResult.ok) continue;
         finalProgressLogged = true;
       }
       await sleep(POLL_INTERVAL);
@@ -141,7 +182,7 @@ async function loop() {
   process.exit(0);
 }
 
-function sleep(ms: number) {
+function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
