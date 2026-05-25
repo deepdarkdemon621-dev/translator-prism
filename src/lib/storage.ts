@@ -139,6 +139,7 @@ class R2Storage implements Storage {
       region: "auto",
       endpoint,
       credentials: { accessKeyId, secretAccessKey },
+      requestChecksumCalculation: "WHEN_REQUIRED",
     });
   }
 
