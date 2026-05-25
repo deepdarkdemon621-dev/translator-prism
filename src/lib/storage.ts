@@ -10,6 +10,7 @@ import {
   NoSuchKey,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 /**
  * Thin storage abstraction in front of `data/uploads/` and `data/exports/`.
@@ -156,6 +157,22 @@ class R2Storage implements Storage {
     return `${this.prefix}/${key}`;
   }
 
+  async createPresignedPutUrl(
+    key: string,
+    contentType: string,
+    expiresIn = 900,
+  ): Promise<string> {
+    return getSignedUrl(
+      this.client,
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: this.keyOf(key),
+        ContentType: contentType,
+      }),
+      { expiresIn },
+    );
+  }
+
   async put(key: string, data: Buffer | string): Promise<void> {
     await this.client.send(
       new PutObjectCommand({
@@ -233,6 +250,20 @@ function make(fsSubdir: string, r2Prefix: string): Storage {
 export function getUploadsStorage(): Storage {
   if (!_uploads) _uploads = make("uploads", "uploads");
   return _uploads;
+}
+
+export async function createUploadsPresignedPutUrl(
+  key: string,
+  contentType: string,
+): Promise<string> {
+  const storage = getUploadsStorage();
+  if (!(storage instanceof R2Storage)) {
+    throw Object.assign(
+      new Error("Direct uploads require STORAGE_DRIVER=r2"),
+      { status: 501 },
+    );
+  }
+  return storage.createPresignedPutUrl(key, contentType);
 }
 
 export function getExportsStorage(): Storage {

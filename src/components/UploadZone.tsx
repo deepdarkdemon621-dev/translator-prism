@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { buttonVariants } from "@/components/ui/button";
 import { PricingDialog } from "@/components/PricingDialog";
 import { translateAllWithGate } from "@/lib/translate/client";
-import { readJsonOrText } from "@/lib/http";
+import { uploadEpubFile, type UploadedBook } from "@/lib/upload/client";
 
 interface UploadZoneProps {
   onUploadComplete: () => void;
@@ -12,11 +12,6 @@ interface UploadZoneProps {
    *  newly-created collections in the parent appear in the dropdown
    *  without a page refresh. */
   collections: Array<{ id: string; name: string }>;
-}
-
-interface UploadedBook {
-  id: string;
-  title: string;
 }
 
 export function UploadZone({ onUploadComplete, collections }: UploadZoneProps) {
@@ -64,26 +59,12 @@ export function UploadZone({ onUploadComplete, collections }: UploadZoneProps) {
       setError(null);
 
       try {
-        const formData = new FormData();
-        formData.append("file", file);
-        // Only admin's selection matters server-side — the route ignores
-        // this field for regular users and forces 'private'. We still send
-        // it for admin so their toggle is respected.
-        if (isAdmin) formData.append("visibility", visibility);
-        if (targetCollectionId) formData.append("collectionId", targetCollectionId);
-
-        const res = await fetch("/api/books/upload", {
-          method: "POST",
-          body: formData,
+        const data = await uploadEpubFile({
+          file,
+          isAdmin,
+          visibility,
+          targetCollectionId,
         });
-
-        const data = await readJsonOrText<UploadedBook>(res);
-        if (!res.ok) {
-          throw new Error("error" in data ? data.error : "Upload failed");
-        }
-        if ("error" in data) {
-          throw new Error(data.error);
-        }
         // Admin skips the pricing gate — their translations go through the
         // translate-all cost gate instead, and showcase uploads shouldn't
         // be blocked by a per-chapter bundle picker.
