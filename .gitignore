@@ -38,6 +38,12 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local AI session memory
+AI_TASK_BOARD.md
+AI_SESSION_ENTRY.md
+skills-lock.json
+.worktrees/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
