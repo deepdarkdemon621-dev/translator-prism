@@ -103,6 +103,7 @@ export function classifyLLMError(err: unknown): ClassifiedLLMError {
   if (
     lower.includes("model_not_found") ||
     lower.includes("model not found") ||
+    lower.includes("model is not supported") ||
     lower.includes("invalid model") ||
     lower.includes("not a valid model")
   ) {

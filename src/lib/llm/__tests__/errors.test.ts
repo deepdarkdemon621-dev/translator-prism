@@ -42,4 +42,14 @@ describe("LLM error classification", () => {
       "invalid_output",
     );
   });
+
+  it("classifies Codex JSONL model errors from non-zero exits", () => {
+    const classified = classifyLLMError(
+      new Error(
+        '{"type":"error","message":"{\\"type\\":\\"error\\",\\"status\\":400,\\"error\\":{\\"type\\":\\"invalid_request_error\\",\\"message\\":\\"The o3 model is not supported when using Codex with a ChatGPT account.\\"}}"}',
+      ),
+    );
+
+    expect(classified.code).toBe("model_not_found");
+  });
 });

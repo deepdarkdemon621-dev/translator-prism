@@ -85,7 +85,7 @@ async function runWithProviderLimit<T>(
   if (!limit) return operation();
 
   let semaphore = providerSemaphores.get(provider.name);
-  if (!semaphore) {
+  if (!semaphore || semaphore.limit !== limit) {
     semaphore = new Semaphore(limit);
     providerSemaphores.set(provider.name, semaphore);
   }
@@ -112,7 +112,7 @@ class Semaphore {
   private active = 0;
   private readonly waiters: Array<() => void> = [];
 
-  constructor(private readonly limit: number) {}
+  constructor(readonly limit: number) {}
 
   async acquire(): Promise<void> {
     if (this.active < this.limit) {

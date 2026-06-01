@@ -121,6 +121,34 @@ describe("ProviderChain", () => {
 
     expect(maxActive).toBe(1);
   });
+
+  it("uses updated CLI concurrency after same-process env changes", async () => {
+    process.env.CLAUDE_CODE_CONCURRENCY = "1";
+    const firstProvider = fakeProvider("claude-code", async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return result("first");
+    });
+    await new ProviderChain([firstProvider]).translate("first", "en", "fr");
+
+    process.env.CLAUDE_CODE_CONCURRENCY = "2";
+    let active = 0;
+    let maxActive = 0;
+    const secondProvider = fakeProvider("claude-code", async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      active--;
+      return result("done");
+    });
+
+    const chain = new ProviderChain([secondProvider]);
+    await Promise.all([
+      chain.translate("one", "en", "fr"),
+      chain.translate("two", "en", "fr"),
+    ]);
+
+    expect(maxActive).toBe(2);
+  });
 });
 
 function fakeProvider(

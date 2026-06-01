@@ -180,6 +180,63 @@ npx pm2 restart prism-worker --update-env
 
 Plain `restart` without `--update-env` keeps the old env values.
 
+## Weekend CLI-provider mode
+
+Use this when you want Claude Code or Codex to translate the existing
+`pending` queue while preserving the worker's normal DB claim/write/retry
+logic. Do not ask an interactive Claude Code/Codex chat session to write
+translations directly into the database; let `prism-worker` remain the queue
+owner.
+
+Keep your local LLM running. It is the fallback after CLI quota, budget, auth,
+or model failures.
+
+Example `.env.worker`:
+
+```env
+TRANSLATION_PROVIDER_CHAIN=claude-code,codex,ollama
+
+CLAUDE_CODE_ENABLED=true
+CLAUDE_CODE_COMMAND=claude
+CLAUDE_CODE_MODEL=sonnet
+CLAUDE_CODE_TIMEOUT_MS=120000
+CLAUDE_CODE_MAX_BUDGET_USD=0.05
+CLAUDE_CODE_BARE=false
+CLAUDE_CODE_CONCURRENCY=1
+
+CODEX_CLI_ENABLED=true
+CODEX_CLI_COMMAND=codex
+CODEX_CLI_MODEL=
+CODEX_CLI_TIMEOUT_MS=120000
+CODEX_CLI_ALLOW_BYPASS=false
+CODEX_CLI_CONCURRENCY=1
+
+WORKER_REQUEUE_FAILED_WHEN_IDLE=true
+WORKER_FAILED_RETRY_LIMIT=2
+WORKER_FAILED_RETRY_BATCH_SIZE=500
+```
+
+Then reload PM2 env:
+
+```powershell
+npx pm2 restart prism-worker --update-env
+```
+
+Expected behavior:
+
+- The worker tries `claude-code` first.
+- If Claude Code hits quota/budget/auth/model failure, the provider is disabled
+  for this worker process and the same row falls through to Codex.
+- If Codex also fails permanently, the row falls through to Ollama/local LLM.
+- Re-enabling a disabled CLI provider requires a worker restart:
+  `npx pm2 restart prism-worker --update-env`.
+
+`CLAUDE_CODE_BARE=false` is the default because `--bare` uses API-key style
+auth and may not work with a normal Claude Code subscription login. Before
+turning on Claude Code for a large batch, run a small real probe and confirm
+that `claude -p --output-format text --json-schema ...` returns plain
+`{"text":"..."}` stdout on your machine.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

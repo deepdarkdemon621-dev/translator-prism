@@ -63,6 +63,7 @@ describe("requeueEligibleFailedTranslations", () => {
   it("does not requeue permanent or exhausted failures", async () => {
     await seed("auth", "failed", 0, "auth_error");
     await seed("model", "failed", 0, "model_not_found");
+    await seed("quota", "failed", 0, "quota_exhausted");
     await seed("limit", "failed", 2, "network");
 
     const count = await requeueEligibleFailedTranslations({
@@ -73,6 +74,7 @@ describe("requeueEligibleFailedTranslations", () => {
     expect(count).toBe(0);
     await expectRow("auth", { status: "failed", retry_count: 0 });
     await expectRow("model", { status: "failed", retry_count: 0 });
+    await expectRow("quota", { status: "failed", retry_count: 0 });
     await expectRow("limit", { status: "failed", retry_count: 2 });
   });
 });

@@ -2,7 +2,7 @@ import { getDb } from "@/lib/db";
 import { translations } from "@/lib/db/schema";
 import { and, eq, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 
-const PERMANENT_CODES = ["auth_error", "model_not_found"];
+const PERMANENT_CODES = ["auth_error", "model_not_found", "quota_exhausted"];
 
 export interface RequeueFailedOptions {
   retryLimit: number;

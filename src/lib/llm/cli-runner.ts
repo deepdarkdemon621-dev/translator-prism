@@ -62,6 +62,10 @@ export function runCli(options: CliRunOptions): Promise<CliRunResult> {
     child.stderr?.on("data", (chunk) => {
       stderr += chunk;
     });
+    child.stdin?.on("error", () => {
+      // The CLI may exit before consuming stdin; close/error handling below
+      // determines the command result.
+    });
 
     child.on("error", (err) => {
       clearTimeout(timer);

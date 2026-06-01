@@ -29,6 +29,9 @@ Fixture status:
 
 - `src/lib/llm/__fixtures__/claude-cli-output.json` is a schema-shaped parser fixture: `{"text":"hello"}`.
 - A successful Claude translation stdout fixture was not captured in this pass to avoid further paid probes.
+- Before enabling `claude-code` for a large batch, run a real low-volume probe for the exact production command:
+  `claude -p --output-format text --model sonnet --tools "" --no-session-persistence --json-schema ...`.
+  The implementation assumes this command emits plain `{"text":"..."}` stdout; this was not confirmed by the 2026-06-01 paid probe.
 
 ## Codex CLI
 

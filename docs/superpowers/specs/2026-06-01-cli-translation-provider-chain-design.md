@@ -170,7 +170,7 @@ Codex stdout: parse JSONL events using the real fixture captured in Task 0. Extr
 The model label stored in the DB:
 
 - `claude-code:sonnet`
-- `codex:o3`
+- `codex:default` when `CODEX_CLI_MODEL` is empty, or `codex:<model>` when set
 - `ollama:qwen2.5:7b`
 
 Token usage is `0` for CLI providers unless the CLI exposes reliable usage data.
