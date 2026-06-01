@@ -9,6 +9,14 @@ vi.mock("../cli-runner", () => ({
 const mockedRunCli = vi.mocked(runCli);
 
 describe("CLI providers", () => {
+  const claudeEnvelope = (result: string, outputTokens = 5) =>
+    JSON.stringify({
+      type: "result",
+      subtype: "success",
+      result,
+      usage: { input_tokens: 10, output_tokens: outputTokens },
+    });
+
   beforeEach(() => {
     vi.resetAllMocks();
     delete process.env.CLAUDE_CODE_BARE;
@@ -17,7 +25,10 @@ describe("CLI providers", () => {
     delete process.env.CODEX_CLI_ALLOW_BYPASS;
     delete process.env.CODEX_CLI_ENABLED;
     delete process.env.CODEX_CLI_MODEL;
-    mockedRunCli.mockResolvedValue({ stdout: '{"text":"Bonjour"}', stderr: "" });
+    mockedRunCli.mockResolvedValue({
+      stdout: claudeEnvelope("Bonjour", 7),
+      stderr: "",
+    });
   });
 
   it("adds Claude --bare only when enabled", async () => {
@@ -76,12 +87,12 @@ describe("CLI providers", () => {
     expect(mockedRunCli.mock.calls[0][0].args).not.toContain("-m");
   });
 
-  it("returns zero token usage for CLI providers", async () => {
+  it("returns token usage from Claude envelope", async () => {
     const result = await new ClaudeCodeCliProvider().translate("hello", "en", "fr");
 
     expect(result).toMatchObject({
       text: "Bonjour",
-      tokensUsed: 0,
+      tokensUsed: 7,
       model: "claude-code:sonnet",
     });
   });

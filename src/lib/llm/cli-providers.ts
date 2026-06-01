@@ -1,4 +1,4 @@
-import { parseClaudeCliOutput, parseCodexCliOutput } from "./cli-output";
+import { extractClaudeTokenUsage, parseClaudeCliOutput, parseCodexCliOutput } from "./cli-output";
 import { runCli } from "./cli-runner";
 import { isClaudeCodeWithinAllowedWindow } from "./provider-window";
 import type { LLMProvider, TranslationResult } from "./types";
@@ -8,12 +8,6 @@ const LANG_NAMES: Record<string, string> = {
   zh: "Chinese",
   en: "English",
 };
-
-const TRANSLATION_SCHEMA = JSON.stringify({
-  type: "object",
-  properties: { text: { type: "string" } },
-  required: ["text"],
-});
 
 export class ClaudeCodeCliProvider implements LLMProvider {
   name = "claude-code";
@@ -32,14 +26,12 @@ export class ClaudeCodeCliProvider implements LLMProvider {
     const args = [
       "-p",
       "--output-format",
-      "text",
+      "json",
       "--model",
       useModel,
       "--tools",
       "",
       "--no-session-persistence",
-      "--json-schema",
-      TRANSLATION_SCHEMA,
     ];
 
     if (process.env.CLAUDE_CODE_BARE === "true") {
@@ -58,7 +50,7 @@ export class ClaudeCodeCliProvider implements LLMProvider {
 
     return {
       text: parseClaudeCliOutput(result.stdout),
-      tokensUsed: 0,
+      tokensUsed: extractClaudeTokenUsage(result.stdout),
       model: `claude-code:${useModel}`,
     };
   }
@@ -113,7 +105,7 @@ function buildTranslationPrompt(
   return [
     `Translate the following ${fromName} novel text into ${toName}.`,
     "Maintain literary style, tone, and nuance.",
-    'Return exactly one JSON object: {"text":"translated text only"}.',
+    "Output ONLY the translated text. No explanations, no JSON, no formatting.",
     "",
     text,
   ].join("\n");

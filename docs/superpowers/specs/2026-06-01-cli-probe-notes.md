@@ -13,25 +13,36 @@ Confirmed CLI support from `claude --help`:
 - `--no-session-persistence`
 - `--output-format text|json|stream-json`
 
-Observed non-`--bare` probe behavior:
+## Systematic flag probes — 2026-06-01 (second pass)
+
+All probes used `echo '...' | claude -p --model sonnet ... 2>&1` via bash.
+
+| Probe | Command flags | Result | Time |
+|-------|--------------|--------|------|
+| A | `--output-format json --no-session-persistence` | ✓ envelope `{"type":"result",...,"result":"{\"text\":\"OK\"}"}` | ~12s |
+| B | `--output-format text --no-session-persistence` | ✓ plain `OK` | ~9s |
+| C | `--output-format json --tools "" --no-session-persistence` | ✓ same envelope as A | ~11s |
+| D | `--json-schema <schema> --no-session-persistence` | empty stdout (no output at all) | ~12s |
+| E | `--output-format json --bare --no-session-persistence` | `is_error:true`, `result:"Not logged in · Please run /login"` | ~2s |
+
+**Key findings:**
+
+- `--tools ""` is safe — does not hang or cause timeout.
+- `--json-schema` produces **empty stdout** — was the root cause of worker timeouts when this flag was in use.
+- `--bare` breaks subscription auth (API-key-only mode); keep `CLAUDE_CODE_BARE=false`.
+- Stable production command: `claude -p --output-format json --model sonnet --tools "" --no-session-persistence`
+
+Observed non-`--bare` probe behavior (first pass):
 
 - Command with `--output-format json`, `--tools ""`, `--no-session-persistence`, and `--max-budget-usd 0.01` exited with code `1`.
 - Stdout was a JSON result envelope with `subtype: "error_max_budget_usd"` and `errors: ["Reached maximum budget ($0.01)"]`.
 - Reported cost was approximately `$0.0126426`, so even a tiny non-`--bare` probe can exceed a `0.01` per-call cap.
 - Debug logging showed hooks/MCP/LSP/plugin startup, so the default should remain configurable and budget-capped.
 
-Observed `--bare` probe behavior:
-
-- Command with `--bare`, `--json-schema`, and `--max-budget-usd 0.005` did not return within 49 seconds and was stopped.
-- Because `--bare` changes auth to API-key/apiKeyHelper only, keep `CLAUDE_CODE_BARE=false` as the default.
-
 Fixture status:
 
-- `src/lib/llm/__fixtures__/claude-cli-output.json` is a schema-shaped parser fixture: `{"text":"hello"}`.
-- A successful Claude translation stdout fixture was not captured in this pass to avoid further paid probes.
-- Before enabling `claude-code` for a large batch, run a real low-volume probe for the exact production command:
-  `claude -p --output-format text --model sonnet --tools "" --no-session-persistence --json-schema ...`.
-  The implementation assumes this command emits plain `{"text":"..."}` stdout; this was not confirmed by the 2026-06-01 paid probe.
+- `src/lib/llm/__fixtures__/claude-cli-output.json` updated to real `--output-format json` envelope format.
+- Implementation already switched from `--json-schema` to `--output-format json` in cli-providers.ts.
 
 ## Codex CLI
 

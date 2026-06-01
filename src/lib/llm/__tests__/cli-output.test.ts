@@ -3,14 +3,23 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CliOutputError,
+  extractClaudeTokenUsage,
   parseClaudeCliOutput,
   parseCodexCliOutput,
 } from "../cli-output";
 
 const fixturesDir = join(__dirname, "..", "__fixtures__");
 
+const claudeEnvelope = (result: string, outputTokens = 5) =>
+  JSON.stringify({
+    type: "result",
+    subtype: "success",
+    result,
+    usage: { input_tokens: 10, output_tokens: outputTokens },
+  });
+
 describe("CLI output parsers", () => {
-  it("extracts text from Claude JSON output", () => {
+  it("extracts text from Claude --output-format json envelope (fixture)", () => {
     const stdout = readFileSync(
       join(fixturesDir, "claude-cli-output.json"),
       "utf8",
@@ -28,17 +37,27 @@ describe("CLI output parsers", () => {
     expect(parseCodexCliOutput(stdout)).toBe("hello");
   });
 
-  it("accepts fenced JSON from Claude", () => {
-    expect(parseClaudeCliOutput('```json\n{"text":"hello"}\n```')).toBe(
-      "hello",
+  it("extracts output token count from Claude envelope", () => {
+    expect(extractClaudeTokenUsage(claudeEnvelope("hello", 42))).toBe(42);
+  });
+
+  it("returns 0 token count when usage field is absent", () => {
+    expect(
+      extractClaudeTokenUsage(JSON.stringify({ type: "result", result: "hi" })),
+    ).toBe(0);
+  });
+
+  it("rejects empty translated text in Claude envelope", () => {
+    expect(() => parseClaudeCliOutput(claudeEnvelope("   "))).toThrow(CliOutputError);
+  });
+
+  it("rejects Claude output that is not a result envelope", () => {
+    expect(() => parseClaudeCliOutput('{"type":"error","message":"bad"}')).toThrow(
+      CliOutputError,
     );
   });
 
-  it("rejects empty translated text", () => {
-    expect(() => parseClaudeCliOutput('{"text":"   "}')).toThrow(CliOutputError);
-  });
-
-  it("rejects non-JSON Claude explanations", () => {
+  it("rejects non-JSON Claude output", () => {
     expect(() => parseClaudeCliOutput("Here is the translation: hello")).toThrow(
       CliOutputError,
     );

@@ -33,12 +33,14 @@ Both local commands are available in this environment:
 **Claude Code CLI** (`claude`):
 
 - `-p/--print`: non-interactive mode.
-- `--output-format text`: plain text stdout. Use `json` only if the implementation needs a larger output envelope with extra metadata.
+- `--output-format json`: emits a Claude result envelope. The translated text
+  is read from the top-level `result` field.
 - `--model <alias>`: accepts short aliases like `sonnet`, `opus`, `haiku` or full model IDs.
 - `--tools ""`: disables all built-in tools.
 - `--no-session-persistence`: prevents session files from being written to disk.
 - `--bare`: minimal startup. It skips hooks, LSP, CLAUDE.md auto-discovery, plugin sync, OAuth/keychain reads, and several user/project setting sources. It can reduce startup time, but it also changes auth behavior: Claude Code will rely on `ANTHROPIC_API_KEY` or an apiKeyHelper instead of the normal logged-in subscription/session path. Make this configurable, not mandatory.
-- `--json-schema <json>`: enforces structured JSON output matching the schema. Recommended for parse-safe output.
+- `--json-schema <json>`: probe testing showed empty stdout with this CLI
+  version, so the worker must not use it for production translation calls.
 - `--max-budget-usd <amount>`: hard budget cap per call. Only works with `--print`.
 
 **Codex CLI** (`codex exec`):
@@ -59,7 +61,8 @@ Before implementing parsers, run a small probe for both CLIs and save representa
 
 Probe goals:
 
-- Confirm whether Claude with `--json-schema` returns plain JSON text or a larger output envelope.
+- Confirm Claude `--output-format json` returns a result envelope and that the
+  prompt yields plain translated text in `result`.
 - Confirm whether Claude with `--bare` works with the local authentication method. If it fails because the user relies on Claude Code subscription/OAuth login, default `CLAUDE_CODE_BARE=false`.
 - Confirm Codex `--json` JSONL event names and where the final assistant text appears.
 - Confirm whether Codex can run with `-s read-only --ephemeral --json -` without bypass on this machine. If it prompts or blocks, require explicit `CODEX_CLI_ALLOW_BYPASS=true` before adding `--dangerously-bypass-approvals-and-sandbox`.
@@ -126,20 +129,16 @@ The provider must:
 Base command:
 
 ```text
-claude -p --output-format text --model <model> --tools "" --no-session-persistence
+claude -p --output-format json --model <model> --tools "" --no-session-persistence
 ```
 
-With structured output enforcement:
-
-```text
-claude -p --output-format text --model <model> --tools "" --no-session-persistence \
-  --json-schema '{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}'
-```
+Do not add `--json-schema`; the 2026-06-01 probe found that it can produce
+empty stdout with Claude Code 2.1.143 in this project.
 
 With budget cap:
 
 ```text
-claude -p --output-format text --model <model> --tools "" --no-session-persistence \
+claude -p --output-format json --model <model> --tools "" --no-session-persistence \
   --max-budget-usd 0.05
 ```
 
@@ -157,23 +156,24 @@ The `-` at the end reads the prompt from stdin. `--json` outputs JSONL events to
 
 ### Expected Output Shape
 
-Both providers must ultimately produce:
+Both providers must ultimately produce a validated translated string.
 
-```json
-{"text": "translated text only"}
-```
+Claude stdout: parse the JSON envelope from `--output-format json` and extract
+the top-level `result` string. The production prompt asks Claude to put only
+translated text in that field, with no JSON or Markdown.
 
-Claude stdout: parse as JSON directly after stripping optional Markdown fences.
-
-Codex stdout: parse JSONL events using the real fixture captured in Task 0. Extract the final assistant text, then parse that text as JSON.
+Codex stdout: parse JSONL events using the real fixture captured in Task 0.
+Extract the final assistant text, then parse that text as JSON containing a
+`text` field.
 
 The model label stored in the DB:
 
 - `claude-code:sonnet`
 - `codex:default` when `CODEX_CLI_MODEL` is empty, or `codex:<model>` when set
-- `ollama:qwen2.5:7b`
+- local model label from the underlying provider, e.g. `qwen2.5:7b`
 
-Token usage is `0` for CLI providers unless the CLI exposes reliable usage data.
+Claude token usage is read from `usage.output_tokens` in the result envelope.
+Codex token usage remains `0` unless the CLI exposes reliable usage data.
 
 ## Configuration
 
@@ -183,7 +183,6 @@ Proposed `.env.worker` keys:
 
 ```env
 TRANSLATION_PROVIDER_CHAIN=claude-code,codex,ollama
-TRANSLATION_FAILED_RETRY_PROVIDER_CHAIN=claude-code,codex,ollama
 
 CLAUDE_CODE_ENABLED=true
 CLAUDE_CODE_COMMAND=claude
@@ -202,8 +201,8 @@ CODEX_CLI_TIMEOUT_MS=120000
 CODEX_CLI_ALLOW_BYPASS=false
 CODEX_CLI_CONCURRENCY=1
 
-LOCAL_LLM_PROVIDER=ollama
-LOCAL_LLM_MODEL=qwen2.5:7b
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen2.5:7b
 
 WORKER_REQUEUE_FAILED_WHEN_IDLE=true
 WORKER_FAILED_RETRY_LIMIT=2
@@ -456,12 +455,12 @@ Manual smoke tests:
 | Risk | Mitigation |
 |---|---|
 | CLI startup cost is high | Use CLI providers only for failed retries or low concurrency. Keep Ollama as default for bulk processing. |
-| Claude/Codex returns explanations instead of plain JSON | Use `--json-schema` for Claude; strict prompt for both; validate output before accepting. |
+| Claude/Codex returns explanations instead of the expected shape | Use strict prompts and validate output before accepting; Claude uses `--output-format json` envelope parsing, Codex uses JSONL final-message parsing. |
 | `--bare` breaks Claude Code auth | Make `CLAUDE_CODE_BARE=false` the default. Enable it only after the probe confirms the local auth method supports it. |
 | CLI auth/session expires | Classify as `auth_error`, disable provider until restart, fall back to local LLM. |
 | Infinite failed retry loop | Add `retry_count` and a retry limit before automatic failed-row requeue. |
 | Historical failed rows have `last_error_code = null` | Include `IS NULL` in retry eligibility or backfill null to `unknown`. |
-| Token usage not reliable from CLI | Store `tokensUsed` as `0` for CLI providers; rely on provider-side budgets and circuit breaker for quota behavior. |
+| Token usage not reliable from CLI | Store `tokensUsed` as `0` where unavailable; Claude currently uses `usage.output_tokens` from the result envelope. |
 | Codex bypass flag is risky | Keep `CODEX_CLI_ENABLED=false` by default. Only append bypass when `CODEX_CLI_ALLOW_BYPASS=true`; document that EPUB text is untrusted input. |
 | Windows `spawn` behavior | Use `shell: false` and resolve `.cmd`/`.exe` shims explicitly on Windows. |
 | JSONL parsing complexity for Codex | Capture real fixture first; use `--output-last-message <tmpfile>` as fallback if JSONL proves fragile. |

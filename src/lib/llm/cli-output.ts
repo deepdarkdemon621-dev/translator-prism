@@ -2,8 +2,45 @@ export class CliOutputError extends Error {
   code = "invalid_output" as const;
 }
 
+/**
+ * Parse the JSON envelope produced by `claude -p --output-format json`.
+ * The translation is in the top-level `result` field as plain text.
+ */
 export function parseClaudeCliOutput(stdout: string): string {
-  return parseTranslationJson(stripMarkdownFence(stdout));
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(stdout.trim());
+  } catch {
+    throw new CliOutputError("Claude CLI output was not valid JSON");
+  }
+  if (
+    isRecord(envelope) &&
+    envelope.type === "result" &&
+    typeof envelope.result === "string"
+  ) {
+    const text = envelope.result.trim();
+    if (!text) throw new CliOutputError("Claude CLI returned empty translation");
+    return text;
+  }
+  throw new CliOutputError(
+    "Claude CLI output did not match expected --output-format json envelope",
+  );
+}
+
+/**
+ * Extract output token count from a `claude -p --output-format json` envelope.
+ * Returns 0 if the field is absent or unparseable.
+ */
+export function extractClaudeTokenUsage(stdout: string): number {
+  try {
+    const envelope = JSON.parse(stdout.trim());
+    if (isRecord(envelope) && isRecord(envelope.usage)) {
+      return Number(envelope.usage.output_tokens) || 0;
+    }
+  } catch {
+    // ignore
+  }
+  return 0;
 }
 
 export function parseCodexCliOutput(stdout: string): string {
@@ -27,6 +64,8 @@ export function parseCodexCliOutput(stdout: string): string {
       event.item.type === "agent_message" &&
       typeof event.item.text === "string"
     ) {
+      // Take the last agent_message — Codex may emit intermediate tool messages
+      // before the final response.
       finalMessage = event.item.text;
     }
   }

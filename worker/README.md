@@ -238,8 +238,9 @@ Expected behavior:
 `CLAUDE_CODE_BARE=false` is the default because `--bare` uses API-key style
 auth and may not work with a normal Claude Code subscription login. Before
 turning on Claude Code for a large batch, run a small real probe and confirm
-that `claude -p --output-format text --json-schema ...` returns plain
-`{"text":"..."}` stdout on your machine.
+that `claude -p --output-format json --tools "" --no-session-persistence`
+returns a JSON envelope whose `result` field contains only translated text on
+your machine.
 
 For Claude subscription quota that resets every Saturday at 10:00 Japan time,
 set the window to end before reset, for example `FRI 18:00-SAT 09:30`. This
