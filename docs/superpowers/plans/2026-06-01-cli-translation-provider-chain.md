@@ -85,10 +85,10 @@ Run:
 
 ```powershell
 $prompt = 'Return exactly this JSON and nothing else: {"text":"hello"}'
-$prompt | codex exec -m o3 -s read-only --ephemeral --json -
+$prompt | codex exec -s read-only --ephemeral --json -
 ```
 
-Expected: command exits without interactive prompt and stdout is JSONL. If it blocks on approval, record that `CODEX_CLI_ALLOW_BYPASS=true` is required.
+Expected: command exits without interactive prompt and stdout is JSONL. If it blocks on approval, record that `CODEX_CLI_ALLOW_BYPASS=true` is required. Only pass `-m` when `CODEX_CLI_MODEL` is explicitly set; the 2026-06-01 probe showed `-m o3` is unsupported for the current ChatGPT-backed Codex account.
 
 - [ ] **Step 4: Save fixtures**
 
@@ -180,6 +180,7 @@ Add classifier branches:
 ```ts
 if (
   lower.includes("budget exceeded") ||
+  lower.includes("maximum budget") ||
   lower.includes("max budget") ||
   lower.includes("--max-budget-usd")
 ) {
@@ -342,6 +343,7 @@ Cover:
 - Codex provider is disabled unless `CODEX_CLI_ENABLED=true`.
 - Codex provider appends `--dangerously-bypass-approvals-and-sandbox` only when `CODEX_CLI_ALLOW_BYPASS=true`.
 - Both providers return `tokensUsed: 0`.
+- Codex omits `-m` unless `CODEX_CLI_MODEL` is configured.
 
 - [ ] **Step 2: Implement `ClaudeCodeCliProvider`**
 
@@ -368,7 +370,7 @@ Return:
 Use:
 
 ```text
-codex exec -m <model> -s read-only --ephemeral --json -
+codex exec [-m <model>] -s read-only --ephemeral --json -
 ```
 
 Append:
@@ -382,7 +384,7 @@ only when `CODEX_CLI_ALLOW_BYPASS=true`.
 Return:
 
 ```ts
-{ text: translated, tokensUsed: 0, model: `codex:${model}` }
+{ text: translated, tokensUsed: 0, model: `codex:${model || "default"}` }
 ```
 
 - [ ] **Step 4: Verify**

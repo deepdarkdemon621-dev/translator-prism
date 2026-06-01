@@ -77,6 +77,9 @@ export const translations = sqliteTable("translations", {
   model: text("model"),
   tokensUsed: integer("tokens_used"),
   errorMessage: text("error_message"),
+  retryCount: integer("retry_count").notNull().default(0),
+  lastProvider: text("last_provider"),
+  lastErrorCode: text("last_error_code"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
 });

@@ -17,6 +17,7 @@ loadEnv();
 import { getLibsqlClient } from "../src/lib/db";
 import { runTranslation } from "../src/lib/llm/executor";
 import { acquireWorkerLock, releaseWorkerLock } from "./lock";
+import { requeueEligibleFailedTranslations } from "./failed-requeue";
 import { startWorkerPet, type WorkerPet } from "./pet";
 import { createProgressTracker } from "./progress";
 import { runRecoverableWorkerStep } from "./resilience";
@@ -27,6 +28,9 @@ const PROGRESS_LOG_INTERVAL = Number(process.env.WORKER_PROGRESS_LOG_INTERVAL_MS
 const RECOVERABLE_ERROR_RETRY_DELAY = Number(
   process.env.WORKER_RECOVERABLE_ERROR_RETRY_DELAY_MS ?? 30_000,
 );
+const REQUEUE_FAILED_WHEN_IDLE = process.env.WORKER_REQUEUE_FAILED_WHEN_IDLE === "true";
+const FAILED_RETRY_LIMIT = Number(process.env.WORKER_FAILED_RETRY_LIMIT ?? 2);
+const FAILED_RETRY_BATCH_SIZE = Number(process.env.WORKER_FAILED_RETRY_BATCH_SIZE ?? 500);
 const LOCK_FILE = path.join(process.cwd(), ".worker.lock");
 
 let shuttingDown = false;
@@ -156,6 +160,25 @@ async function loop() {
         );
         if (!finalProgressResult.ok) continue;
         finalProgressLogged = true;
+
+        if (REQUEUE_FAILED_WHEN_IDLE) {
+          const requeueResult = await runRecoverableStep(
+            "requeueEligibleFailed",
+            () =>
+              requeueEligibleFailedTranslations({
+                retryLimit: FAILED_RETRY_LIMIT,
+                batchSize: FAILED_RETRY_BATCH_SIZE,
+              }),
+          );
+          if (!requeueResult.ok) continue;
+          if (requeueResult.value > 0) {
+            console.log(
+              `[worker] Requeued ${requeueResult.value} failed rows for retry`,
+            );
+            finalProgressLogged = false;
+            continue;
+          }
+        }
       }
       await sleep(POLL_INTERVAL);
       continue;

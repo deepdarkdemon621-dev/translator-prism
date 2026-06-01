@@ -16,6 +16,7 @@ export type LLMErrorCode =
   | "auth_error"
   | "model_not_found"
   | "network"
+  | "invalid_output"
   | "unknown";
 
 export interface ClassifiedLLMError {
@@ -29,6 +30,14 @@ export function classifyLLMError(err: unknown): ClassifiedLLMError {
   const raw = (err instanceof Error ? err.message : String(err)).slice(0, 500);
   const lower = raw.toLowerCase();
 
+  if ((err as { code?: string }).code === "invalid_output") {
+    return {
+      code: "invalid_output",
+      friendly: "CLI returned invalid translation output",
+      raw,
+    };
+  }
+
   // Quota: the account is out of money / hit monthly cap. User needs to
   // top up before Retry makes any difference. OpenAI's exact string is
   // "You exceeded your current quota, please check your plan and billing";
@@ -39,7 +48,11 @@ export function classifyLLMError(err: unknown): ClassifiedLLMError {
     lower.includes("credit balance is too low") ||
     lower.includes("exceeded your current quota") ||
     lower.includes("you have exceeded your budget") ||
-    lower.includes("quota exceeded")
+    lower.includes("quota exceeded") ||
+    lower.includes("budget exceeded") ||
+    lower.includes("maximum budget") ||
+    lower.includes("max budget") ||
+    lower.includes("--max-budget-usd")
   ) {
     return {
       code: "quota_exhausted",
@@ -56,7 +69,12 @@ export function classifyLLMError(err: unknown): ClassifiedLLMError {
     lower.includes("incorrect api key") ||
     lower.includes("invalid x-api-key") ||
     lower.includes("authentication_error") ||
-    lower.includes("no auth credentials")
+    lower.includes("no auth credentials") ||
+    lower.includes("login required") ||
+    lower.includes("not authenticated") ||
+    lower.includes("authentication required") ||
+    lower.includes("please log in") ||
+    lower.includes("unauthorized")
   ) {
     return {
       code: "auth_error",
@@ -101,6 +119,7 @@ export function classifyLLMError(err: unknown): ClassifiedLLMError {
     lower.includes("econnreset") ||
     lower.includes("fetch failed") ||
     lower.includes("network error") ||
+    lower.includes("cli process timed out") ||
     lower.includes("timeout") ||
     lower.includes("etimedout") ||
     lower.includes("enotfound")
@@ -134,6 +153,7 @@ export function parseErrorCode(message: string | null): LLMErrorCode {
     "auth_error",
     "model_not_found",
     "network",
+    "invalid_output",
     "unknown",
   ];
   return known.includes(code) ? code : "unknown";

@@ -150,7 +150,7 @@ Add `--bare` only when `CLAUDE_CODE_BARE=true` and the probe confirms auth still
 Base command:
 
 ```text
-codex exec -m <model> -s read-only --ephemeral --json -
+codex exec [-m <model>] -s read-only --ephemeral --json -
 ```
 
 The `-` at the end reads the prompt from stdin. `--json` outputs JSONL events to stdout. If probe testing shows the command blocks on approval, the provider may append `--dangerously-bypass-approvals-and-sandbox` only when `CODEX_CLI_ALLOW_BYPASS=true`. Codex provider should remain opt-in because bypass mode removes normal approval and sandbox guarantees.
@@ -195,7 +195,7 @@ CLAUDE_CODE_CONCURRENCY=1
 
 CODEX_CLI_ENABLED=false
 CODEX_CLI_COMMAND=codex
-CODEX_CLI_MODEL=o3
+CODEX_CLI_MODEL=
 CODEX_CLI_TIMEOUT_MS=120000
 CODEX_CLI_ALLOW_BYPASS=false
 CODEX_CLI_CONCURRENCY=1
@@ -398,7 +398,7 @@ CLI-specific patterns:
 
 | Pattern | Maps to |
 |---|---|
-| `budget exceeded`, `max budget`, `--max-budget-usd` | `quota_exhausted` |
+| `budget exceeded`, `maximum budget`, `max budget`, `--max-budget-usd` | `quota_exhausted` |
 | `login required`, `not authenticated`, `authentication required`, `please log in` | `auth_error` |
 | `CLI process timed out` | `network` |
 | `(err as {code?:string}).code === "invalid_output"` (instanceof CliOutputError) | `invalid_output` |
