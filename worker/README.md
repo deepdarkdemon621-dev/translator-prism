@@ -242,6 +242,10 @@ that `claude -p --output-format json --tools "" --no-session-persistence`
 returns a JSON envelope whose `result` field contains only translated text on
 your machine.
 
+In non-bare mode, the worker does not pass `ANTHROPIC_API_KEY` to the Claude
+Code subprocess. This lets Claude Code use your local subscription login even
+when `.env.local` contains an API key for the SDK-based provider.
+
 For Claude subscription quota that resets every Saturday at 10:00 Japan time,
 set the window to end before reset, for example `FRI 18:00-SAT 09:30`. This
 uses the remaining weekly quota after work and protects the new week's quota.

@@ -8,6 +8,7 @@ export interface CliRunOptions {
   stdin: string;
   timeoutMs: number;
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface CliRunResult {
@@ -40,7 +41,7 @@ export function runCli(options: CliRunOptions): Promise<CliRunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(resolveCliCommand(options.command), options.args, {
       cwd: options.cwd,
-      env: process.env,
+      env: options.env ?? process.env,
       shell: false,
       windowsHide: true,
     });

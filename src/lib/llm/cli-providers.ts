@@ -46,6 +46,7 @@ export class ClaudeCodeCliProvider implements LLMProvider {
       args,
       stdin: buildTranslationPrompt(text, fromLang, toLang),
       timeoutMs: Number(process.env.CLAUDE_CODE_TIMEOUT_MS ?? 120_000),
+      env: buildClaudeCliEnv(),
     });
 
     return {
@@ -54,6 +55,14 @@ export class ClaudeCodeCliProvider implements LLMProvider {
       model: `claude-code:${useModel}`,
     };
   }
+}
+
+function buildClaudeCliEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (process.env.CLAUDE_CODE_BARE !== "true") {
+    delete env.ANTHROPIC_API_KEY;
+  }
+  return env;
 }
 
 export class CodexCliProvider implements LLMProvider {

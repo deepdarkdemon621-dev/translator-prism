@@ -22,6 +22,7 @@ describe("CLI providers", () => {
     delete process.env.CLAUDE_CODE_BARE;
     delete process.env.CLAUDE_CODE_MAX_BUDGET_USD;
     delete process.env.CLAUDE_CODE_MODEL;
+    delete process.env.ANTHROPIC_API_KEY;
     delete process.env.CODEX_CLI_ALLOW_BYPASS;
     delete process.env.CODEX_CLI_ENABLED;
     delete process.env.CODEX_CLI_MODEL;
@@ -43,6 +44,25 @@ describe("CLI providers", () => {
     await new ClaudeCodeCliProvider().translate("hello", "en", "fr");
 
     expect(mockedRunCli.mock.calls[0][0].args).not.toContain("--bare");
+  });
+
+  it("removes external Anthropic API key from Claude subscription-mode calls", async () => {
+    process.env.ANTHROPIC_API_KEY = "invalid-api-key";
+
+    await new ClaudeCodeCliProvider().translate("hello", "en", "fr");
+
+    expect(mockedRunCli.mock.calls[0][0].env?.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it("keeps external Anthropic API key for Claude bare-mode calls", async () => {
+    process.env.CLAUDE_CODE_BARE = "true";
+    process.env.ANTHROPIC_API_KEY = "api-key-for-bare-mode";
+
+    await new ClaudeCodeCliProvider().translate("hello", "en", "fr");
+
+    expect(mockedRunCli.mock.calls[0][0].env?.ANTHROPIC_API_KEY).toBe(
+      "api-key-for-bare-mode",
+    );
   });
 
   it("adds Claude budget only when configured", async () => {
