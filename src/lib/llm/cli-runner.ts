@@ -88,7 +88,7 @@ export function runCli(options: CliRunOptions): Promise<CliRunResult> {
       resolve({ stdout, stderr });
     });
 
-    if (options.stdin) child.stdin.write(options.stdin);
-    child.stdin.end();
+    if (options.stdin) child.stdin?.write(options.stdin);
+    child.stdin?.end();
   });
 }

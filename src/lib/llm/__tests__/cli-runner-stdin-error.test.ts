@@ -4,12 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 describe("CLI runner stdin errors", () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.doMock("node:child_process", () => ({
-      spawn: vi.fn(() => createChildThatClosesBeforeStdinIsConsumed()),
-    }));
   });
 
   it("ignores stdin pipe errors and lets process close determine the result", async () => {
+    vi.doMock("node:child_process", () => ({
+      spawn: vi.fn(() => createChildThatClosesBeforeStdinIsConsumed()),
+    }));
     const { runCli } = await import("../cli-runner");
 
     await expect(
@@ -17,6 +17,22 @@ describe("CLI runner stdin errors", () => {
         command: "fake-cli",
         args: [],
         stdin: "long prompt",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toMatchObject({ stdout: "", stderr: "" });
+  });
+
+  it("handles child processes without stdin", async () => {
+    vi.doMock("node:child_process", () => ({
+      spawn: vi.fn(() => createChildWithoutStdin()),
+    }));
+    const { runCli } = await import("../cli-runner");
+
+    await expect(
+      runCli({
+        command: "fake-cli",
+        args: [],
+        stdin: "prompt",
         timeoutMs: 1_000,
       }),
     ).resolves.toMatchObject({ stdout: "", stderr: "" });
@@ -45,6 +61,23 @@ function createChildThatClosesBeforeStdinIsConsumed() {
     },
   });
   child.kill = () => {};
+
+  return child;
+}
+
+function createChildWithoutStdin() {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter & { setEncoding: () => void };
+    stderr: EventEmitter & { setEncoding: () => void };
+    stdin: null;
+    kill: () => void;
+  };
+
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+  child.stdin = null;
+  child.kill = () => {};
+  queueMicrotask(() => child.emit("close", 0));
 
   return child;
 }

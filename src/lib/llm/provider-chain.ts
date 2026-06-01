@@ -86,6 +86,9 @@ async function runWithProviderLimit<T>(
 
   let semaphore = providerSemaphores.get(provider.name);
   if (!semaphore || semaphore.limit !== limit) {
+    // PM2 --update-env restarts the process, which clears this map. The
+    // replacement path mainly keeps tests and same-process env reloads honest;
+    // in-flight waiters on an older semaphore may finish under the old limit.
     semaphore = new Semaphore(limit);
     providerSemaphores.set(provider.name, semaphore);
   }
