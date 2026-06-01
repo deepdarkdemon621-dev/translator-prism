@@ -8,16 +8,6 @@ const DAY_TO_INDEX: Record<string, number> = {
   SAT: 6,
 };
 
-const WEEKDAY_TO_INDEX: Record<string, number> = {
-  Sun: 0,
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-};
-
 export interface WeeklyWindow {
   startMinute: number;
   endMinute: number;
@@ -48,10 +38,11 @@ export function parseWeeklyWindow(value: string): WeeklyWindow | null {
     return null;
   }
 
-  return {
+  const parsed = {
     startMinute: startDay * 24 * 60 + startHour * 60 + startMinute,
     endMinute: endDay * 24 * 60 + endHour * 60 + endMinute,
   };
+  return parsed.startMinute === parsed.endMinute ? null : parsed;
 }
 
 export function isWithinWeeklyWindow(
@@ -84,6 +75,8 @@ export function isClaudeCodeWithinAllowedWindow(now = new Date()): boolean {
 function getZonedMinuteOfWeek(now: Date, timeZone: string): number | null {
   let parts: Intl.DateTimeFormatPart[];
   try {
+    // Use a named IANA zone through Intl so DST-observing zones stay correct.
+    // Tokyo has no DST, but this keeps the helper valid for other zones.
     parts = new Intl.DateTimeFormat("en-US", {
       timeZone,
       weekday: "short",
@@ -100,5 +93,5 @@ function getZonedMinuteOfWeek(now: Date, timeZone: string): number | null {
   const minute = parts.find((part) => part.type === "minute")?.value;
 
   if (!weekday || hour === undefined || minute === undefined) return null;
-  return WEEKDAY_TO_INDEX[weekday] * 24 * 60 + Number(hour) * 60 + Number(minute);
+  return DAY_TO_INDEX[weekday.toUpperCase()] * 24 * 60 + Number(hour) * 60 + Number(minute);
 }

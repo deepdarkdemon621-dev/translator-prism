@@ -12,13 +12,24 @@ export class ProviderChainError extends Error {
     readonly attempts: ProviderAttemptFailure[],
     readonly finalProvider: string | null,
     readonly finalCode: LLMErrorCode,
+    readonly skippedUnavailableProviders: string[] = [],
   ) {
     super(
-      `All providers failed: ${attempts
-        .map((attempt) => `${attempt.providerName}:${attempt.code}`)
-        .join(", ")}`,
+      formatProviderChainErrorMessage(attempts, skippedUnavailableProviders),
     );
   }
+}
+
+function formatProviderChainErrorMessage(
+  attempts: ProviderAttemptFailure[],
+  skippedUnavailableProviders: string[],
+): string {
+  const failed = attempts.map((attempt) => `${attempt.providerName}:${attempt.code}`);
+  const skipped =
+    skippedUnavailableProviders.length > 0
+      ? `; skipped unavailable providers: ${skippedUnavailableProviders.join(", ")}`
+      : "";
+  return `All providers failed: ${failed.join(", ")}${skipped}`;
 }
 
 export const disabledProviders = new Set<string>();
@@ -43,10 +54,15 @@ export class ProviderChain implements LLMProvider {
     model?: string,
   ): Promise<TranslationResult> {
     const attempts: ProviderAttemptFailure[] = [];
+    const skippedUnavailableProviders: string[] = [];
 
     for (const provider of this.providers) {
       if (disabledProviders.has(provider.name)) continue;
-      if (provider.isAvailable && !provider.isAvailable()) continue;
+      // Providers without isAvailable() are always eligible.
+      if (provider.isAvailable && !provider.isAvailable()) {
+        skippedUnavailableProviders.push(provider.name);
+        continue;
+      }
 
       try {
         const result = await runWithProviderLimit(provider, () =>
@@ -74,6 +90,7 @@ export class ProviderChain implements LLMProvider {
       attempts,
       final?.providerName ?? null,
       final?.code ?? "unknown",
+      skippedUnavailableProviders,
     );
   }
 }

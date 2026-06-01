@@ -23,6 +23,20 @@ describe("weekly provider window", () => {
         new Date("2026-06-06T00:29:00.000Z"),
       ),
     ).toBe(true);
+    expect(
+      isWithinWeeklyWindow(
+        windowSpec,
+        timeZone,
+        new Date("2026-06-05T14:59:00.000Z"),
+      ),
+    ).toBe(true);
+    expect(
+      isWithinWeeklyWindow(
+        windowSpec,
+        timeZone,
+        new Date("2026-06-05T15:01:00.000Z"),
+      ),
+    ).toBe(true);
   });
 
   it("rejects times outside a weekly window", () => {
@@ -31,6 +45,13 @@ describe("weekly provider window", () => {
         windowSpec,
         timeZone,
         new Date("2026-06-06T01:00:00.000Z"),
+      ),
+    ).toBe(false);
+    expect(
+      isWithinWeeklyWindow(
+        windowSpec,
+        timeZone,
+        new Date("2026-06-06T00:30:00.000Z"),
       ),
     ).toBe(false);
     expect(
@@ -50,6 +71,7 @@ describe("weekly provider window", () => {
 
   it("treats invalid windows as unavailable", () => {
     expect(parseWeeklyWindow("FRIDAY AFTER WORK")).toBeNull();
+    expect(parseWeeklyWindow("FRI 18:00-FRI 18:00")).toBeNull();
     expect(
       isWithinWeeklyWindow(
         "FRIDAY AFTER WORK",

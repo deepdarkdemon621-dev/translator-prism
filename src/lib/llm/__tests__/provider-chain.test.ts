@@ -48,6 +48,19 @@ describe("ProviderChain", () => {
     expect(disabledProviders.has("claude-code")).toBe(false);
   });
 
+  it("reports skipped unavailable providers when none can run", async () => {
+    const onlyProvider = {
+      ...fakeProvider("claude-code", async () => {
+        throw new Error("should not be called");
+      }),
+      isAvailable: () => false,
+    };
+
+    await expect(
+      new ProviderChain([onlyProvider]).translate("hello", "en", "fr"),
+    ).rejects.toThrow("skipped unavailable providers: claude-code");
+  });
+
   it("prefixes plain model names with the successful provider name", async () => {
     const chain = new ProviderChain([
       fakeProvider("ollama", async () => result("local")),
