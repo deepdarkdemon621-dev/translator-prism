@@ -25,6 +25,14 @@ function formatProviderChainErrorMessage(
   skippedUnavailableProviders: string[],
 ): string {
   const failed = attempts.map((attempt) => `${attempt.providerName}:${attempt.code}`);
+  if (failed.length === 0) {
+    const skipped =
+      skippedUnavailableProviders.length > 0
+        ? `; skipped unavailable providers: ${skippedUnavailableProviders.join(", ")}`
+        : "";
+    return `No providers ran${skipped}`;
+  }
+
   const skipped =
     skippedUnavailableProviders.length > 0
       ? `; skipped unavailable providers: ${skippedUnavailableProviders.join(", ")}`

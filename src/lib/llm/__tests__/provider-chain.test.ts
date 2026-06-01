@@ -58,7 +58,9 @@ describe("ProviderChain", () => {
 
     await expect(
       new ProviderChain([onlyProvider]).translate("hello", "en", "fr"),
-    ).rejects.toThrow("skipped unavailable providers: claude-code");
+    ).rejects.toThrow(
+      "No providers ran; skipped unavailable providers: claude-code",
+    );
   });
 
   it("prefixes plain model names with the successful provider name", async () => {
