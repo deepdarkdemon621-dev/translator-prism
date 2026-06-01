@@ -6,6 +6,7 @@ export interface TranslationResult {
 
 export interface LLMProvider {
   name: string;
+  isAvailable?(): boolean;
   translate(
     text: string,
     fromLang: string,

@@ -1,5 +1,6 @@
 import { parseClaudeCliOutput, parseCodexCliOutput } from "./cli-output";
 import { runCli } from "./cli-runner";
+import { isClaudeCodeWithinAllowedWindow } from "./provider-window";
 import type { LLMProvider, TranslationResult } from "./types";
 
 const LANG_NAMES: Record<string, string> = {
@@ -16,6 +17,10 @@ const TRANSLATION_SCHEMA = JSON.stringify({
 
 export class ClaudeCodeCliProvider implements LLMProvider {
   name = "claude-code";
+
+  isAvailable(): boolean {
+    return isClaudeCodeWithinAllowedWindow();
+  }
 
   async translate(
     text: string,

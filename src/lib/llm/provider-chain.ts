@@ -46,6 +46,7 @@ export class ProviderChain implements LLMProvider {
 
     for (const provider of this.providers) {
       if (disabledProviders.has(provider.name)) continue;
+      if (provider.isAvailable && !provider.isAvailable()) continue;
 
       try {
         const result = await runWithProviderLimit(provider, () =>

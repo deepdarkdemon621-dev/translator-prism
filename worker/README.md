@@ -203,6 +203,8 @@ CLAUDE_CODE_TIMEOUT_MS=120000
 CLAUDE_CODE_MAX_BUDGET_USD=0.05
 CLAUDE_CODE_BARE=false
 CLAUDE_CODE_CONCURRENCY=1
+CLAUDE_CODE_ALLOWED_WEEKLY_WINDOW=FRI 18:00-SAT 09:30
+CLAUDE_CODE_WINDOW_TZ=Asia/Tokyo
 
 CODEX_CLI_ENABLED=true
 CODEX_CLI_COMMAND=codex
@@ -225,6 +227,8 @@ npx pm2 restart prism-worker --update-env
 Expected behavior:
 
 - The worker tries `claude-code` first.
+- Outside `CLAUDE_CODE_ALLOWED_WEEKLY_WINDOW`, the worker skips `claude-code`
+  without marking the row failed and continues to the next provider.
 - If Claude Code hits quota/budget/auth/model failure, the provider is disabled
   for this worker process and the same row falls through to Codex.
 - If Codex also fails permanently, the row falls through to Ollama/local LLM.
@@ -236,6 +240,10 @@ auth and may not work with a normal Claude Code subscription login. Before
 turning on Claude Code for a large batch, run a small real probe and confirm
 that `claude -p --output-format text --json-schema ...` returns plain
 `{"text":"..."}` stdout on your machine.
+
+For Claude subscription quota that resets every Saturday at 10:00 Japan time,
+set the window to end before reset, for example `FRI 18:00-SAT 09:30`. This
+uses the remaining weekly quota after work and protects the new week's quota.
 
 ## Troubleshooting
 

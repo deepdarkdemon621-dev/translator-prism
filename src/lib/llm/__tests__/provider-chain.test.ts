@@ -28,6 +28,26 @@ describe("ProviderChain", () => {
     expect(secondCalled).toBe(false);
   });
 
+  it("skips unavailable providers without recording a failure", async () => {
+    let firstCalled = false;
+    const first = {
+      ...fakeProvider("claude-code", async () => {
+        firstCalled = true;
+        throw new Error("should not be called");
+      }),
+      isAvailable: () => false,
+    };
+    const second = fakeProvider("ollama", async () => result("local"));
+
+    const chain = new ProviderChain([first, second]);
+
+    await expect(chain.translate("hello", "en", "fr")).resolves.toMatchObject({
+      text: "local",
+    });
+    expect(firstCalled).toBe(false);
+    expect(disabledProviders.has("claude-code")).toBe(false);
+  });
+
   it("prefixes plain model names with the successful provider name", async () => {
     const chain = new ProviderChain([
       fakeProvider("ollama", async () => result("local")),

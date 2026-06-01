@@ -192,6 +192,8 @@ CLAUDE_CODE_TIMEOUT_MS=120000
 CLAUDE_CODE_MAX_BUDGET_USD=
 CLAUDE_CODE_BARE=false
 CLAUDE_CODE_CONCURRENCY=1
+CLAUDE_CODE_ALLOWED_WEEKLY_WINDOW=
+CLAUDE_CODE_WINDOW_TZ=Asia/Tokyo
 
 CODEX_CLI_ENABLED=false
 CODEX_CLI_COMMAND=codex
@@ -209,6 +211,23 @@ WORKER_FAILED_RETRY_BATCH_SIZE=500
 ```
 
 If `TRANSLATION_PROVIDER_CHAIN` is not set, keep current behavior from `loadLLMSettings()` to avoid breaking existing deployments.
+
+### Weekly Claude Code Window
+
+For subscription quotas that reset weekly, optionally restrict Claude Code to a
+weekly usage window:
+
+```env
+CLAUDE_CODE_ALLOWED_WEEKLY_WINDOW=FRI 18:00-SAT 09:30
+CLAUDE_CODE_WINDOW_TZ=Asia/Tokyo
+```
+
+When the current time is outside the window, `ProviderChain` skips
+`claude-code` without recording a provider failure or triggering the circuit
+breaker. The same translation row then falls through to the next configured
+provider, usually `ollama`. Keep the check in `ProviderChain.translate()`, not
+only in provider construction, because `executor.ts` caches provider instances
+across translation rows.
 
 ## Windows Command Resolution
 
