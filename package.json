@@ -10,6 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "tsx src/lib/db/migrate.ts",
+    "read": "tsx scripts/read.ts",
+    "read:worker": "tsx scripts/read.ts --env .env.worker",
+    "books": "tsx scripts/read.ts --list --env .env.worker",
     "worker": "tsx worker/index.ts",
     "worker:pm2": "pm2 start worker/ecosystem.config.cjs"
   },
