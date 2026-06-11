@@ -5,12 +5,12 @@ import {
   chapters,
   paragraphs,
   translations,
-  users,
 } from "@/lib/db/schema";
-import { and, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 import { parseErrorCode, type LLMErrorCode } from "@/lib/llm/errors";
 import { getActiveProviderName } from "@/lib/llm/settings";
+import { visibleBooksWhereForActor } from "@/lib/library/visibility";
 
 // 5-minute throughput window for ETA. Long enough to smooth out the gaps
 // between worker polls (every few seconds) and short enough to react when
@@ -32,53 +32,14 @@ export async function GET() {
   const user = await getCurrentUser();
   const db = getDb();
 
-  // Narrow to book ids the caller can see. Same rule as /api/books GET:
-  // admin → everything, others → own uploads ∪ admin-public.
-  let bookIds: string[];
-  if (user.isAdmin) {
-    bookIds = (await db.select({ id: books.id }).from(books).all()).map(
-      (b) => b.id,
-    );
-  } else {
-    const adminIds = (
-      await db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.isAdmin, 1))
-        .all()
-    ).map((u) => u.id);
-    const visible = adminIds.length
-      ? or(
-          eq(books.userId, user.id),
-          and(eq(books.visibility, "public"), inArray(books.userId, adminIds)),
-        )
-      : eq(books.userId, user.id);
-    bookIds = (
-      await db.select({ id: books.id }).from(books).where(visible).all()
-    ).map((b) => b.id);
-  }
-
-  if (bookIds.length === 0) {
-    return NextResponse.json({
-      overall: { done: 0, pending: 0, processing: 0, failed: 0, total: 0 },
-      books: [],
-      throughput: {
-        recentDone: 0,
-        windowSeconds: THROUGHPUT_WINDOW_SECONDS,
-        etaSeconds: null,
-      },
-      recentFailure: null,
-      activeProvider: await getActiveProviderName(),
-    });
-  }
+  const visibleBookWhere = await visibleBooksWhereForActor(db, user);
 
   // Per-book translation status tallies in a single query: SUM(CASE)
   // collapses four separate GROUP BY rows (one per status) into one row
   // per book, so we process ~1 row per book instead of up to 4.
-  // Dropping the books.id join here is safe — we already bounded the
-  // scope with bookIds above, so there's nothing for the books join to
-  // add. Relies on idx_translations_paragraph_status + idx_paragraphs_chapter_id
-  // + idx_chapters_book_id (migration 0009) to keep this from scanning.
+  // The books join applies the shared visibility predicate without first
+  // materializing a JS-side book-id list. Relies on the paragraph/chapter
+  // indexes from migration 0009 plus the visibility indexes from 0012.
   const translationAgg = await db
     .select({
       bookId: chapters.bookId,
@@ -91,7 +52,8 @@ export async function GET() {
     .from(translations)
     .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))
     .innerJoin(chapters, eq(paragraphs.chapterId, chapters.id))
-    .where(inArray(chapters.bookId, bookIds))
+    .innerJoin(books, eq(chapters.bookId, books.id))
+    .where(visibleBookWhere)
     .groupBy(chapters.bookId)
     .all();
 
@@ -118,7 +80,7 @@ export async function GET() {
     })
     .from(books)
     .leftJoin(chapters, eq(chapters.bookId, books.id))
-    .where(inArray(books.id, bookIds))
+    .where(visibleBookWhere)
     .groupBy(books.id)
     .all();
 
@@ -183,9 +145,10 @@ export async function GET() {
     .from(translations)
     .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))
     .innerJoin(chapters, eq(paragraphs.chapterId, chapters.id))
+    .innerJoin(books, eq(chapters.bookId, books.id))
     .where(
       and(
-        inArray(chapters.bookId, bookIds),
+        visibleBookWhere,
         eq(translations.status, "done"),
         gt(translations.updatedAt, since),
       ),
@@ -227,9 +190,10 @@ export async function GET() {
       .from(translations)
       .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))
       .innerJoin(chapters, eq(paragraphs.chapterId, chapters.id))
+      .innerJoin(books, eq(chapters.bookId, books.id))
       .where(
         and(
-          inArray(chapters.bookId, bookIds),
+          visibleBookWhere,
           eq(translations.status, "failed"),
         ),
       )

@@ -67,19 +67,18 @@ export default function CollectionPage({
   const [renameValue, setRenameValue] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [allCollections, setAllCollections] = useState<Array<{ id: string; name: string }>>([]);
+  const [allCollectionsLoaded, setAllCollectionsLoaded] = useState(false);
   const bookSelect = useSelection();
   const confirm = useConfirm();
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/collections")
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data: Array<{ id: string; name: string }>) => {
-        if (!cancelled) setAllCollections(data ?? []);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+  const fetchAllCollections = useCallback(async () => {
+    if (allCollectionsLoaded) return;
+    const res = await fetch("/api/collections");
+    if (!res.ok) return;
+    const data: Array<{ id: string; name: string }> = await res.json();
+    setAllCollections(data ?? []);
+    setAllCollectionsLoaded(true);
+  }, [allCollectionsLoaded]);
 
   const fetchCollection = useCallback(async () => {
     const res = await fetch(`/api/collections/${id}`);
@@ -166,6 +165,11 @@ export default function CollectionPage({
       body: JSON.stringify({ order: next.map((b) => b.id) }),
     });
     fetchCollection();
+  };
+
+  const handleEnterBookSelect = () => {
+    bookSelect.enter();
+    fetchAllCollections();
   };
 
   const handleRename = async () => {
@@ -309,7 +313,7 @@ export default function CollectionPage({
           <Button
             variant="outline"
             size="sm"
-            onClick={bookSelect.enter}
+            onClick={handleEnterBookSelect}
             className="hidden sm:inline-flex"
           >
             Select

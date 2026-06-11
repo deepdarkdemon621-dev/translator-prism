@@ -41,6 +41,7 @@ yarn-error.log*
 # local AI session memory
 AI_TASK_BOARD.md
 AI_SESSION_ENTRY.md
+AI_HANDOFF_SUMMARY.md
 skills-lock.json
 .worktrees/
 

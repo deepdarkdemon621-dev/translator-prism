@@ -5,11 +5,11 @@ import {
   chapters,
   paragraphs,
   translations,
-  users,
 } from "@/lib/db/schema";
-import { and, desc, eq, inArray, like, or } from "drizzle-orm";
+import { and, desc, eq, like, or } from "drizzle-orm";
 import { getCurrentUser } from "@/lib/auth";
 import { parseErrorCode, type LLMErrorCode } from "@/lib/llm/errors";
+import { visibleBooksWhereForActor } from "@/lib/library/visibility";
 
 /**
  * Tiny status probe for the global banner. Every page polls this every
@@ -28,37 +28,7 @@ export async function GET() {
   const user = await getCurrentUser();
   const db = getDb();
 
-  let bookIds: string[];
-  if (user.isAdmin) {
-    bookIds = (await db.select({ id: books.id }).from(books).all()).map(
-      (b) => b.id,
-    );
-  } else {
-    const adminIds = (
-      await db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.isAdmin, 1))
-        .all()
-    ).map((u) => u.id);
-    const visible = adminIds.length
-      ? or(
-          eq(books.userId, user.id),
-          and(eq(books.visibility, "public"), inArray(books.userId, adminIds)),
-        )
-      : eq(books.userId, user.id);
-    bookIds = (
-      await db.select({ id: books.id }).from(books).where(visible).all()
-    ).map((b) => b.id);
-  }
-
-  if (bookIds.length === 0) {
-    return NextResponse.json({
-      quotaExhausted: false,
-      authError: false,
-      recentCode: null,
-    });
-  }
+  const visibleBookWhere = await visibleBooksWhereForActor(db, user);
 
   // Only look at messages with a `[blocking_code]` prefix so transient
   // failures (rate_limit, network) don't trigger the banner. We want
@@ -69,9 +39,10 @@ export async function GET() {
     .from(translations)
     .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))
     .innerJoin(chapters, eq(paragraphs.chapterId, chapters.id))
+    .innerJoin(books, eq(chapters.bookId, books.id))
     .where(
       and(
-        inArray(chapters.bookId, bookIds),
+        visibleBookWhere,
         eq(translations.status, "failed"),
         or(
           like(translations.errorMessage, "[quota_exhausted]%"),

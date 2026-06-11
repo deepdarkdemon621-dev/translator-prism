@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { buttonVariants } from "@/components/ui/button";
 import { PricingDialog } from "@/components/PricingDialog";
 import { translateAllWithGate } from "@/lib/translate/client";
-import { uploadEpubFile, type UploadedBook } from "@/lib/upload/client";
+import { uploadEpubFilesSequentially } from "@/lib/upload/batch-client";
+import type { UploadedBook } from "@/lib/upload/client";
 
 interface UploadZoneProps {
   onUploadComplete: () => void;
@@ -17,11 +18,15 @@ interface UploadZoneProps {
 export function UploadZone({ onUploadComplete, collections }: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{
+    fileName: string;
+    index: number;
+    total: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // After a successful upload we hold the new book briefly so the pricing
-  // dialog can open with context. Cleared when the user skips or buys,
-  // which also triggers the library refresh.
-  const [pending, setPending] = useState<UploadedBook | null>(null);
+  // Successful regular-user uploads wait here so the pricing dialog can
+  // open one book at a time. Cleared when the user skips or buys.
+  const [pendingBooks, setPendingBooks] = useState<UploadedBook[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   // Admin-only: auto-kick translate-all after a successful upload. Goes
   // through the same cost gate as the manual button so paid-provider
@@ -49,73 +54,118 @@ export function UploadZone({ onUploadComplete, collections }: UploadZoneProps) {
   }, []);
 
   const handleUpload = useCallback(
-    async (file: File) => {
-      if (!file.name.endsWith(".epub")) {
+    async (files: File[]) => {
+      if (isUploading) return;
+      if (files.length === 0) return;
+
+      const epubFiles = files.filter((file) =>
+        file.name.toLowerCase().endsWith(".epub"),
+      );
+      const skippedFiles = files.filter(
+        (file) => !file.name.toLowerCase().endsWith(".epub"),
+      );
+      if (epubFiles.length === 0) {
         setError("Only EPUB files are supported");
         return;
       }
 
       setIsUploading(true);
-      setError(null);
+      setUploadProgress(null);
+      setError(
+        skippedFiles.length
+          ? `Skipped non-EPUB file${skippedFiles.length === 1 ? "" : "s"}: ${skippedFiles
+              .map((file) => file.name)
+              .join(", ")}`
+          : null,
+      );
 
       try {
-        const data = await uploadEpubFile({
-          file,
+        const result = await uploadEpubFilesSequentially({
+          files: epubFiles,
           isAdmin,
           visibility,
           targetCollectionId,
+          onFileStart: (fileName, index, total) => {
+            setUploadProgress({ fileName, index, total });
+          },
         });
-        // Admin skips the pricing gate — their translations go through the
-        // translate-all cost gate instead, and showcase uploads shouldn't
-        // be blocked by a per-chapter bundle picker.
-        if (isAdmin) {
+
+        if (result.successes.length > 0 && isAdmin) {
           onUploadComplete();
-        } else {
-          setPending({ id: data.id, title: data.title });
+        }
+        if (!isAdmin && result.successes.length > 0) {
+          setPendingBooks((current) => [
+            ...current,
+            ...result.successes.map((success) => ({
+              id: success.book.id,
+              title: success.book.title,
+            })),
+          ]);
         }
 
-        if (autoTranslate) {
+        if (autoTranslate && result.successes.length > 0) {
           // Kick translate-all in the background. Errors (incl. cost-gate
           // cancels) surface via alert inside translateAllWithGate. We
           // don't await because the upload should clear the spinner
           // independently of how long the user spends on the confirm.
-          translateAllWithGate(`/api/books/${data.id}/translate-all`)
-            .then((r) => {
-              if (r.error) console.warn("Auto-translate error:", r.error);
-            })
-            .catch((err) => console.warn("Auto-translate failed:", err));
+          for (const success of result.successes) {
+            translateAllWithGate(`/api/books/${success.book.id}/translate-all`)
+              .then((r) => {
+                if (r.error) console.warn("Auto-translate error:", r.error);
+              })
+              .catch((err) => console.warn("Auto-translate failed:", err));
+          }
+        }
+
+        if (result.failures.length > 0) {
+          setError(
+            `Failed upload${result.failures.length === 1 ? "" : "s"}: ${result.failures
+              .map((failure) => `${failure.fileName} (${failure.error})`)
+              .join("; ")}`,
+          );
+        } else if (skippedFiles.length === 0) {
+          setError(null);
         }
       } catch (err) {
         setError((err as Error).message);
       } finally {
         setIsUploading(false);
+        setUploadProgress(null);
       }
     },
-    [autoTranslate, isAdmin, visibility, targetCollectionId, onUploadComplete],
+    [
+      autoTranslate,
+      isAdmin,
+      isUploading,
+      visibility,
+      targetCollectionId,
+      onUploadComplete,
+    ],
   );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
-      const file = e.dataTransfer.files[0];
-      if (file) handleUpload(file);
+      handleUpload(Array.from(e.dataTransfer.files));
     },
     [handleUpload],
   );
 
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) handleUpload(file);
+      handleUpload(Array.from(e.target.files ?? []));
+      e.target.value = "";
     },
     [handleUpload],
   );
 
   const handlePricingDone = useCallback(() => {
-    setPending(null);
+    setPendingBooks((current) => current.slice(1));
     onUploadComplete();
   }, [onUploadComplete]);
+
+  const pending = pendingBooks[0] ?? null;
 
   return (
     <>
@@ -135,7 +185,11 @@ export function UploadZone({ onUploadComplete, collections }: UploadZoneProps) {
         {isUploading ? (
           <div className="flex flex-col items-center gap-3">
             <div className="h-10 w-10 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
-            <p className="text-muted-foreground text-sm">Uploading and parsing…</p>
+            <p className="text-muted-foreground text-sm">
+              {uploadProgress
+                ? `Uploading ${uploadProgress.index}/${uploadProgress.total}: ${uploadProgress.fileName}`
+                : "Uploading and parsing..."}
+            </p>
           </div>
         ) : (
           <>
@@ -160,18 +214,19 @@ export function UploadZone({ onUploadComplete, collections }: UploadZoneProps) {
               className="text-lg mb-1 tracking-tight"
               style={{ fontFamily: "var(--font-heading)" }}
             >
-              Drop an EPUB here
+              Drop EPUB files here
             </p>
             <p className="text-sm text-muted-foreground mb-5">
-              …or click below to select a file
+              or click below to select one or more files
             </p>
             <label className="inline-flex cursor-pointer">
               <span className={buttonVariants({ variant: "outline", size: "sm" })}>
-                Select EPUB
+                Select EPUBs
               </span>
               <input
                 type="file"
                 accept=".epub"
+                multiple
                 className="hidden"
                 onChange={handleFileSelect}
               />
