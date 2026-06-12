@@ -3,6 +3,7 @@ import path from "path";
 import readline from "readline";
 import {
   parseTerminalReaderArgs,
+  TERMINAL_READER_HELP,
   type TerminalReaderArgs,
 } from "../src/lib/reader/terminal-cli";
 
@@ -73,6 +74,10 @@ function loadEnvForReader(envFile: string | undefined): void {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const args = parseTerminalReaderArgs(argv);
+  if (args.showHelp) {
+    console.log(TERMINAL_READER_HELP);
+    return;
+  }
   const langsProvided = hasExplicitLangs(argv, args);
   loadEnvForReader(args.envFile);
 

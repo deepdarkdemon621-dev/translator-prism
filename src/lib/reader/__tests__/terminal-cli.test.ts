@@ -1,7 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { parseTerminalReaderArgs } from "@/lib/reader/terminal-cli";
+import {
+  parseTerminalReaderArgs,
+  TERMINAL_READER_HELP,
+} from "@/lib/reader/terminal-cli";
 
 describe("terminal reader CLI args", () => {
+  it("allows --help without a book id", () => {
+    expect(parseTerminalReaderArgs(["--help"])).toEqual({
+      bookId: undefined,
+      envFile: undefined,
+      langs: "auto",
+      chapterIndex: undefined,
+      listBooks: false,
+      showHelp: true,
+    });
+  });
+
+  it("documents listing, opening, and navigation commands", () => {
+    expect(TERMINAL_READER_HELP).toContain("npm run read:help");
+    expect(TERMINAL_READER_HELP).toContain("npm run books");
+    expect(TERMINAL_READER_HELP).toContain("npm run read:worker -- <bookId>");
+    expect(TERMINAL_READER_HELP).toContain("n / p");
+    expect(TERMINAL_READER_HELP).toContain("] / [");
+    expect(TERMINAL_READER_HELP).toContain("1 / 2 / 3 / 4");
+  });
+
   it("requires a book id", () => {
     expect(() => parseTerminalReaderArgs([])).toThrow(
       "Usage: npm run read -- --book <bookId>",
@@ -15,6 +38,7 @@ describe("terminal reader CLI args", () => {
       langs: "auto",
       chapterIndex: undefined,
       listBooks: true,
+      showHelp: false,
     });
   });
 
@@ -34,6 +58,7 @@ describe("terminal reader CLI args", () => {
       langs: "ja,zh,en",
       chapterIndex: 2,
       listBooks: false,
+      showHelp: false,
     });
   });
 
@@ -44,6 +69,7 @@ describe("terminal reader CLI args", () => {
       langs: "ja,zh",
       chapterIndex: 2,
       listBooks: false,
+      showHelp: false,
     });
   });
 
@@ -54,6 +80,7 @@ describe("terminal reader CLI args", () => {
       langs: "auto",
       chapterIndex: 2,
       listBooks: false,
+      showHelp: false,
     });
   });
 
@@ -64,6 +91,7 @@ describe("terminal reader CLI args", () => {
       langs: "ja,zh",
       chapterIndex: undefined,
       listBooks: false,
+      showHelp: false,
     });
   });
 
@@ -74,6 +102,7 @@ describe("terminal reader CLI args", () => {
       langs: "auto",
       chapterIndex: undefined,
       listBooks: false,
+      showHelp: false,
     });
   });
 });
