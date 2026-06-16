@@ -29,10 +29,45 @@ function fixedPage<T>(
   };
 }
 
-function visualRows(value: string, columns: number): number {
+function charWidth(char: string): number {
+  const codePoint = char.codePointAt(0) ?? 0;
+  if (
+    codePoint === 0 ||
+    (codePoint >= 0x0300 && codePoint <= 0x036f) ||
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f)
+  ) {
+    return 0;
+  }
+  if (
+    codePoint >= 0x1100 &&
+    (codePoint <= 0x115f ||
+      codePoint === 0x2329 ||
+      codePoint === 0x232a ||
+      (codePoint >= 0x2e80 && codePoint <= 0xa4cf) ||
+      (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+      (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
+      (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
+      (codePoint >= 0xff00 && codePoint <= 0xff60) ||
+      (codePoint >= 0xffe0 && codePoint <= 0xffe6))
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function displayWidth(value: string): number {
+  let width = 0;
+  for (const char of value) {
+    width += charWidth(char);
+  }
+  return width;
+}
+
+export function terminalRowsForText(value: string, columns: number): number {
   const width = Math.max(1, columns);
   return value.split("\n").reduce((total, line) => {
-    return total + Math.max(1, Math.ceil(line.length / width));
+    return total + Math.max(1, Math.ceil(displayWidth(line) / width));
   }, 0);
 }
 
@@ -52,7 +87,7 @@ export function paginateByTerminalRows<T>(
 
   for (const item of items) {
     const itemRows =
-      visualRows(options.renderItem(item), options.columns) +
+      terminalRowsForText(options.renderItem(item), options.columns) +
       options.separatorRows;
     if (currentPage.length > 0 && currentRows + itemRows > availableRows) {
       pages.push(currentPage);

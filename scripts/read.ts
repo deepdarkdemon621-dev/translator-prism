@@ -4,7 +4,10 @@ import readline from "readline";
 import type { ReaderLang } from "../src/lib/reader/language-selection";
 import type { TerminalParagraph } from "../src/lib/reader/terminal-format";
 import { restoreTerminalInput } from "../src/lib/reader/terminal-input";
-import { paginateByTerminalRows } from "../src/lib/reader/terminal-pagination";
+import {
+  paginateByTerminalRows,
+  terminalRowsForText,
+} from "../src/lib/reader/terminal-pagination";
 import {
   parseTerminalReaderArgs,
   TERMINAL_READER_HELP,
@@ -142,11 +145,27 @@ async function runEpubReader(epubPath: string): Promise<void> {
 
   function render(): void {
     const chapter = terminalBook.chapters[chapterIndex];
+    const footer = "n next | p prev | ] next chapter | [ prev chapter | t toc | q quit";
+    const headerRows = process.stdout.columns
+      ? terminalRowsForText(
+          [
+            "Prism Local EPUB Reader",
+            `Book: ${terminalBook.title}`,
+            `Author: ${terminalBook.author}`,
+            `File: ${terminalBook.path}`,
+            `Chapter ${chapter.index + 1}/${terminalBook.chapters.length}: ${chapter.title}`,
+            "Page 9999/9999",
+            "",
+            footer,
+          ].join("\n"),
+          process.stdout.columns,
+        )
+      : 9;
     const paginated = paginateByTerminalRows(chapter.paragraphs, page, {
       renderItem: renderParagraph,
       rows: process.stdout.rows,
       columns: process.stdout.columns,
-      reservedRows: 9,
+      reservedRows: headerRows,
       separatorRows: 1,
       fallbackPageSize: PAGE_SIZE,
     });
@@ -168,7 +187,7 @@ async function runEpubReader(epubPath: string): Promise<void> {
       console.log("");
     }
 
-    console.log("n next | p prev | ] next chapter | [ prev chapter | t toc | q quit");
+    console.log(footer);
     saveProgress();
   }
 
