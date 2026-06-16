@@ -3,6 +3,7 @@ import path from "path";
 import readline from "readline";
 import type { ReaderLang } from "../src/lib/reader/language-selection";
 import type { TerminalParagraph } from "../src/lib/reader/terminal-format";
+import { restoreTerminalInput } from "../src/lib/reader/terminal-input";
 import {
   parseTerminalReaderArgs,
   TERMINAL_READER_HELP,
@@ -194,7 +195,7 @@ async function runEpubReader(epubPath: string): Promise<void> {
       }
     } finally {
       acceptingLineInput = false;
-      setRawMode(true);
+      restoreTerminalInput(process.stdin, true);
     }
     render();
   }
