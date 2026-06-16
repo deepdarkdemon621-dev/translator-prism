@@ -1,5 +1,6 @@
 export interface TerminalReaderArgs {
   bookId?: string;
+  epubPath?: string;
   envFile?: string;
   langs: string;
   chapterIndex?: number;
@@ -8,7 +9,7 @@ export interface TerminalReaderArgs {
 }
 
 export const TERMINAL_READER_USAGE =
-  "Usage: npm run read -- --book <bookId> [--langs auto|ja,zh,en] [--chapter 3] [--env .env.worker] | npm run books";
+  "Usage: npm run read -- --book <bookId> [--langs auto|ja,zh,en] [--chapter 3] [--env .env.worker] | npm run read:epub -- <path> | npm run books";
 
 export const TERMINAL_READER_HELP = `${TERMINAL_READER_USAGE}
 
@@ -23,11 +24,18 @@ Commands:
   npm run read:worker -- <bookId>
       Open one book from .env.worker.
 
+  npm run read:epub -- <path>
+      Open a local EPUB file directly with automatic resume.
+
   npm run read -- --book <bookId> --langs auto
       Open one book using .env.local, falling back to .env.
 
+  npm run read -- --epub <path>
+      Open a local EPUB file directly without DB, upload, or translation.
+
 Options:
   --book <bookId>       Book id to open.
+  --epub <path>         Local EPUB file path to open directly.
   --langs <mode>        auto, source lang only, or comma list like ja,zh,en.
   --chapter <number>    Open a one-based chapter number.
   --env <file>          Load a specific env file, for example .env.worker.
@@ -37,6 +45,7 @@ Options:
 Reader keys:
   n / p                 Next / previous page.
   ] / [                 Next / previous chapter.
+  t                     Table of contents / chapter jump for EPUB mode.
   1 / 2 / 3 / 4         Source / bilingual / trilingual / auto language mode.
   q                     Quit.`;
 
@@ -63,22 +72,37 @@ function isEnvFileValue(value: string | undefined): boolean {
   return typeof value === "string" && value.startsWith(".env");
 }
 
+function isEpubPathValue(value: string | undefined): boolean {
+  return typeof value === "string" && value.toLowerCase().endsWith(".epub");
+}
+
 export function parseTerminalReaderArgs(argv: string[]): TerminalReaderArgs {
   const showHelp = argv.includes("--help") || argv.includes("-h");
   const listBooks = argv.includes("--list") || argv.includes("list");
   const explicitEnvFile = getArgValue(argv, "--env");
+  const explicitEpubPath = getArgValue(argv, "--epub");
   const rawPositional = positionalArgs(argv);
   const positionalEnvFile = isEnvFileValue(rawPositional[0])
     ? rawPositional[0]
     : undefined;
-  const envFile = explicitEnvFile ?? positionalEnvFile;
-  const positional = positionalEnvFile
+  const positionalAfterEnv = positionalEnvFile
     ? rawPositional.slice(1)
     : rawPositional;
-  const bookId = showHelp ? undefined : getArgValue(argv, "--book") ?? positional[0];
+  const positionalEpubPath = isEpubPathValue(positionalAfterEnv[0])
+    ? positionalAfterEnv[0]
+    : undefined;
+  const envFile = explicitEnvFile ?? positionalEnvFile;
+  const epubPath = explicitEpubPath ?? positionalEpubPath;
+  const positional = positionalEpubPath
+    ? positionalAfterEnv.slice(1)
+    : positionalAfterEnv;
+  const bookId = showHelp || epubPath
+    ? undefined
+    : getArgValue(argv, "--book") ?? positional[0];
   if (showHelp) {
     return {
       bookId,
+      epubPath,
       envFile,
       langs: "auto",
       chapterIndex: undefined,
@@ -86,7 +110,7 @@ export function parseTerminalReaderArgs(argv: string[]): TerminalReaderArgs {
       showHelp,
     };
   }
-  if (!bookId && !listBooks) throw new Error(TERMINAL_READER_USAGE);
+  if (!bookId && !epubPath && !listBooks) throw new Error(TERMINAL_READER_USAGE);
 
   const positionalLangs = isChapterValue(positional[1]) ? undefined : positional[1];
   const positionalChapter = isChapterValue(positional[1])
@@ -97,6 +121,7 @@ export function parseTerminalReaderArgs(argv: string[]): TerminalReaderArgs {
 
   return {
     bookId,
+    epubPath,
     envFile,
     langs: getArgValue(argv, "--langs") ?? positionalLangs ?? "auto",
     chapterIndex: chapterNumber
