@@ -39,6 +39,21 @@ In table-of-contents mode:
 - Enter a chapter number to jump to that chapter and reset page to 1.
 - Empty input or `Esc` returns to the current reading position.
 
+## Terminal Viewport Behavior
+
+Local EPUB mode should not depend on the host terminal scroll bar for normal reading. It should render a bounded page that fits the current terminal viewport when terminal dimensions are available.
+
+The rendered page height must account for:
+
+- Reader chrome: title, author, file path, chapter title, page line, blank separator, and footer controls.
+- Wrapped header/footer lines, especially long local file paths.
+- CJK full-width characters, which occupy two terminal columns in common Windows Terminal/PowerShell setups.
+- Blank separator lines between paragraph blocks.
+
+When terminal dimensions are unavailable, such as non-TTY smoke tests, the reader may fall back to fixed paragraph pagination.
+
+Known limitation: if one paragraph alone is taller than the terminal viewport, it is still rendered as one block. Splitting inside a paragraph is a possible future improvement.
+
 ## Data Flow
 
 1. CLI parses `--epub <path>` or the positional path supplied by `read:epub`.
@@ -81,7 +96,13 @@ Suggested modules:
   - Reuses `parseEpub`.
   - Builds a stable progress key.
 - Existing `terminal-format.ts`
-  - Reused for paragraph pagination and text cleanup.
+  - Reused for text cleanup and source-text rendering.
+- `src/lib/reader/terminal-pagination.ts`
+  - Calculates row-aware terminal pages from rendered text blocks.
+  - Estimates CJK full-width display width.
+  - Provides fixed-size fallback when terminal dimensions are unavailable.
+- `src/lib/reader/terminal-input.ts`
+  - Restores raw mode and resumes stdin after line-input prompts such as TOC jumps.
 - Existing `terminal-progress.ts`
   - Reused for local progress persistence.
 
@@ -105,10 +126,21 @@ Add focused tests before implementation:
 - EPUB loader reads the existing fixture EPUB and returns title, chapters, paragraphs, and a stable progress key.
 - EPUB mode does not require env or DB loading. Prefer testing this by keeping the loader independent from `getDb`.
 - Progress load/save works with an `epub:` progress key.
+- Terminal pagination accounts for CJK full-width characters and wrapped reader chrome.
+- TOC line input restores stdin so jumping does not exit the reader.
 
 Manual smoke after implementation:
 
 - `npm run read:help`
 - `npm run read:epub -- src/lib/epub/__tests__/fixtures/test.epub`
+- `npm run read:epub -- "C:\Programming\translator\test-novel\gzr.epub"`
 - Turn pages, switch chapters, quit, reopen, and confirm resume.
 - Press `t`, jump to a chapter, quit, reopen, and confirm the jumped position is remembered.
+
+## Implementation Notes
+
+- Design committed in `0a748af`.
+- Initial implementation committed in `28ab422`.
+- TOC stdin-resume fix committed in `5de819b`.
+- Row-aware viewport pagination committed in `334a290`.
+- Header/footer and CJK full-width pagination correction committed in `0a592d5`.

@@ -273,3 +273,50 @@ Only stage local EPUB reader files and handoff updates. Do not stage existing Wo
 git add -- package.json scripts/read.ts src/lib/reader/terminal-cli.ts src/lib/reader/terminal-epub.ts src/lib/reader/__tests__/terminal-cli.test.ts src/lib/reader/__tests__/terminal-epub.test.ts docs/superpowers/plans/2026-06-16-local-epub-terminal-reader.md AI_SESSION_ENTRY.md AI_HANDOFF_SUMMARY.md AI_TASK_BOARD.md
 git commit -m "feat: add local epub terminal reader"
 ```
+
+---
+
+## Post-Implementation Addendum
+
+Final committed work:
+
+- `0a748af` - design spec for direct local EPUB terminal reading.
+- `28ab422` - initial local EPUB reader implementation.
+- `5de819b` - TOC jump stdin-resume fix.
+- `334a290` - row-aware EPUB page sizing.
+- `0a592d5` - header/footer and CJK full-width pagination correction.
+
+Final user-facing commands:
+
+```powershell
+npm run read:epub -- "C:\Programming\translator\test-novel\gzr.epub"
+npm run read -- --epub "C:\Programming\translator\test-novel\gzr.epub"
+npm run read:help
+```
+
+Final local EPUB behavior:
+
+- Reads a user-specified `.epub` file directly.
+- Does not load `.env.local`, `.env.worker`, Turso, DB reader helpers, upload flows, or translation worker logic.
+- Renders original text only.
+- Saves automatic resume progress in `data/terminal-progress.json` under a deterministic `epub:` progress key derived from the resolved absolute path.
+- Supports `n`/`p`, arrow left/right, `[`/`]`, `t` TOC jump, and `q`.
+- Uses row-aware terminal pagination when `process.stdout.rows` and `process.stdout.columns` are available.
+- Counts wrapped reader chrome and CJK full-width characters when estimating terminal rows.
+- Falls back to fixed paragraph pagination in non-TTY smoke tests.
+
+Verification evidence:
+
+```powershell
+npx vitest run src/lib/reader/__tests__/terminal-pagination.test.ts src/lib/reader/__tests__/terminal-cli.test.ts src/lib/reader/__tests__/terminal-epub.test.ts src/lib/reader/__tests__/terminal-progress.test.ts src/lib/reader/__tests__/terminal-format.test.ts src/lib/reader/__tests__/terminal-input.test.ts
+npx tsc --noEmit --pretty false
+npx eslint scripts/read.ts src/lib/reader/terminal-pagination.ts src/lib/reader/__tests__/terminal-pagination.test.ts
+git diff --check
+npm run read:epub -- "C:\Programming\translator\test-novel\gzr.epub"
+```
+
+Latest focused reader suite passed 6 files / 32 tests. Typecheck and targeted ESLint passed. `git diff --check` passed with CRLF warnings only. The real EPUB smoke opened `test-novel\gzr.epub` and resumed to the recorded local progress.
+
+Known residual risk:
+
+- A single paragraph that is taller than the terminal viewport is still rendered as one block. If this becomes a problem, add paragraph-internal line pagination rather than trying to control the host terminal scroll bar.
