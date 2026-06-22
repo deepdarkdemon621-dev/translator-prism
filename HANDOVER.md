@@ -73,7 +73,7 @@ npm run read -- --epub "C:\Programming\translator\test-novel\gzr.epub"
 npm run read:help
 ```
 
-Keyboard controls: `n`/right for next page, `p`/left for previous page, `]`/`[` for chapter navigation, `t` for table-of-contents jump, and `q` to quit. Progress is saved locally in `data/terminal-progress.json` under an `epub:` key. The local EPUB reader uses terminal row-aware pagination, including wrapped title/path/footer rows and CJK full-width characters.
+Keyboard controls: `n`/down/right for next page, `p`/up/left for previous page, `]`/`[` for chapter navigation, `t` for table-of-contents jump, and `q` to quit. Progress is saved locally in `data/terminal-progress.json` under an `epub:` key. The local EPUB reader uses terminal row-aware pagination, including wrapped title/path/footer rows and CJK full-width characters.
 
 ### First-time setup for translation
 1. Start dev server.

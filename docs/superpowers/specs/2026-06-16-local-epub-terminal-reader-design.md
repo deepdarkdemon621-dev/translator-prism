@@ -26,8 +26,8 @@ Help output must document the EPUB mode, including command examples and keyboard
 
 In reading mode:
 
-- `n` or right arrow: next page.
-- `p` or left arrow: previous page.
+- `n`, down arrow, or right arrow: next page.
+- `p`, up arrow, or left arrow: previous page.
 - `]`: next chapter.
 - `[`: previous chapter.
 - `t`: open table of contents.
@@ -144,3 +144,4 @@ Manual smoke after implementation:
 - TOC stdin-resume fix committed in `5de819b`.
 - Row-aware viewport pagination committed in `334a290`.
 - Header/footer and CJK full-width pagination correction committed in `0a592d5`.
+- Arrow-key page navigation for up/down/left/right added in the local FEAT-005 change.

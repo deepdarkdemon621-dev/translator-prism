@@ -300,7 +300,7 @@ Final local EPUB behavior:
 - Does not load `.env.local`, `.env.worker`, Turso, DB reader helpers, upload flows, or translation worker logic.
 - Renders original text only.
 - Saves automatic resume progress in `data/terminal-progress.json` under a deterministic `epub:` progress key derived from the resolved absolute path.
-- Supports `n`/`p`, arrow left/right, `[`/`]`, `t` TOC jump, and `q`.
+- Supports `n`/`p`, arrow up/down/left/right, `[`/`]`, `t` TOC jump, and `q`.
 - Uses row-aware terminal pagination when `process.stdout.rows` and `process.stdout.columns` are available.
 - Counts wrapped reader chrome and CJK full-width characters when estimating terminal rows.
 - Falls back to fixed paragraph pagination in non-TTY smoke tests.
@@ -320,3 +320,9 @@ Latest focused reader suite passed 6 files / 32 tests. Typecheck and targeted ES
 Known residual risk:
 
 - A single paragraph that is taller than the terminal viewport is still rendered as one block. If this becomes a problem, add paragraph-internal line pagination rather than trying to control the host terminal scroll bar.
+
+Latest navigation addendum:
+
+- `n`, down arrow, and right arrow advance one page.
+- `p`, up arrow, and left arrow go back one page.
+- The same page-navigation mapping is shared by DB-backed terminal reading and local EPUB mode through `getTerminalPageKeyAction()`.

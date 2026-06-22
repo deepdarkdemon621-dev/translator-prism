@@ -25,8 +25,8 @@
   - `2`: source + first translation language
   - `3`: source + second translation language
   - `4`: source + all available languages
-  - `n` or `right`: next page
-  - `p` or `left`: previous page
+  - `n`, `down`, or `right`: next page
+  - `p`, `up`, or `left`: previous page
   - `]`: next chapter
   - `[`: previous chapter
   - `q` or `ctrl+c`: quit
@@ -67,7 +67,7 @@ JA  これはテストです。
 ZH  这是一个测试。
 EN  This is a test.
 
-n next page | p prev page | [ prev chapter | ] next chapter | 1/2/3/4 mode | q quit
+n/Down/Right next | p/Up/Left prev | [ prev chapter | ] next chapter | 1/2/3/4 mode | q quit
 ```
 
 ## File Structure
@@ -813,7 +813,7 @@ async function main() {
       console.log(renderParagraphBlock(paragraph, langs));
       console.log("");
     }
-    console.log("n next | p prev | ] next chapter | [ prev chapter | 1/2/3/4 mode | q quit");
+    console.log("n/Down/Right next | p/Up/Left prev | ] next chapter | [ prev chapter | 1/2/3/4 mode | q quit");
 
     saveTerminalProgress(args.bookId, { chapterIndex, page, langs: langArg });
   };

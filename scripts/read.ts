@@ -3,7 +3,10 @@ import path from "path";
 import readline from "readline";
 import type { ReaderLang } from "../src/lib/reader/language-selection";
 import type { TerminalParagraph } from "../src/lib/reader/terminal-format";
-import { restoreTerminalInput } from "../src/lib/reader/terminal-input";
+import {
+  getTerminalPageKeyAction,
+  restoreTerminalInput,
+} from "../src/lib/reader/terminal-input";
 import {
   paginateByTerminalRows,
   terminalRowsForText,
@@ -145,7 +148,8 @@ async function runEpubReader(epubPath: string): Promise<void> {
 
   function render(): void {
     const chapter = terminalBook.chapters[chapterIndex];
-    const footer = "n next | p prev | ] next chapter | [ prev chapter | t toc | q quit";
+    const footer =
+      "n/Down/Right next | p/Up/Left prev | ] next chapter | [ prev chapter | t toc | q quit";
     const headerRows = process.stdout.columns
       ? terminalRowsForText(
           [
@@ -238,8 +242,9 @@ async function runEpubReader(epubPath: string): Promise<void> {
         process.exit(0);
       }
 
-      if (key.name === "n" || key.name === "right") page += 1;
-      if (key.name === "p" || key.name === "left") page -= 1;
+      const pageAction = getTerminalPageKeyAction(key);
+      if (pageAction === "next-page") page += 1;
+      if (pageAction === "previous-page") page -= 1;
       if (key.sequence === "]") {
         chapterIndex = Math.min(terminalBook.chapters.length - 1, chapterIndex + 1);
         page = 0;
@@ -363,7 +368,7 @@ async function main(): Promise<void> {
     }
 
     console.log(
-      "n next | p prev | ] next chapter | [ prev chapter | 1/2/3/4 mode | q quit",
+      "n/Down/Right next | p/Up/Left prev | ] next chapter | [ prev chapter | 1/2/3/4 mode | q quit",
     );
     const progress = { chapterIndex, page, langs: langArg };
     saveTerminalProgress(terminalBookId, progress);
@@ -384,8 +389,9 @@ async function main(): Promise<void> {
         process.exit(0);
       }
 
-      if (key.name === "n" || key.name === "right") page += 1;
-      if (key.name === "p" || key.name === "left") page -= 1;
+      const pageAction = getTerminalPageKeyAction(key);
+      if (pageAction === "next-page") page += 1;
+      if (pageAction === "previous-page") page -= 1;
       if (key.sequence === "]") {
         chapterIndex = Math.min(terminalBook.chapters.length - 1, chapterIndex + 1);
         page = 0;

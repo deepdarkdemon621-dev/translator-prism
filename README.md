@@ -40,8 +40,8 @@ npm run read:worker -- <bookId>
 
 Reader keys:
 
-- `n` / right arrow: next page.
-- `p` / left arrow: previous page.
+- `n` / down arrow / right arrow: next page.
+- `p` / up arrow / left arrow: previous page.
 - `]` / `[`: next / previous chapter.
 - `t`: table of contents; enter a chapter number to jump.
 - `q`: quit.

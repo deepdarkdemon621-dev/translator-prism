@@ -43,7 +43,7 @@ Options:
   --help, -h            Show this help.
 
 Reader keys:
-  n / p                 Next / previous page.
+  n / p, arrows         Next / previous page. Down/Right go next; Up/Left go previous.
   ] / [                 Next / previous chapter.
   t                     Table of contents / chapter jump for EPUB mode.
   1 / 2 / 3 / 4         Source / bilingual / trilingual / auto language mode.

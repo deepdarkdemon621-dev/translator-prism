@@ -25,7 +25,8 @@ describe("terminal reader CLI args", () => {
     expect(TERMINAL_READER_HELP).toContain("--epub <path>");
     expect(TERMINAL_READER_HELP).toContain("automatic resume");
     expect(TERMINAL_READER_HELP).toContain("t");
-    expect(TERMINAL_READER_HELP).toContain("n / p");
+    expect(TERMINAL_READER_HELP).toContain("n / p, arrows");
+    expect(TERMINAL_READER_HELP).toContain("Down/Right go next");
     expect(TERMINAL_READER_HELP).toContain("] / [");
     expect(TERMINAL_READER_HELP).toContain("1 / 2 / 3 / 4");
   });
