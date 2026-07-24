@@ -26,6 +26,7 @@ describe("CLI providers", () => {
     delete process.env.CODEX_CLI_ALLOW_BYPASS;
     delete process.env.CODEX_CLI_ENABLED;
     delete process.env.CODEX_CLI_MODEL;
+    delete process.env.CODEX_CLI_REASONING_EFFORT;
     mockedRunCli.mockResolvedValue({
       stdout: claudeEnvelope("Bonjour", 7),
       stderr: "",
@@ -105,6 +106,25 @@ describe("CLI providers", () => {
     await new CodexCliProvider().translate("hello", "en", "fr");
 
     expect(mockedRunCli.mock.calls[0][0].args).not.toContain("-m");
+  });
+
+  it("passes configured Codex reasoning effort to the CLI", async () => {
+    process.env.CODEX_CLI_ENABLED = "true";
+    process.env.CODEX_CLI_REASONING_EFFORT = "high";
+    mockedRunCli.mockResolvedValue({
+      stdout:
+        '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"text\\":\\"Bonjour\\"}"}}\n',
+      stderr: "",
+    });
+
+    await new CodexCliProvider().translate("hello", "en", "fr");
+
+    expect(mockedRunCli.mock.calls[0][0].args).toEqual(
+      expect.arrayContaining([
+        "-c",
+        'model_reasoning_effort="high"',
+      ]),
+    );
   });
 
   it("returns token usage from Claude envelope", async () => {

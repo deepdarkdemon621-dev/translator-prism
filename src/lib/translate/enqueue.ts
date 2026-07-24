@@ -120,6 +120,12 @@ export async function enqueueChapterTranslations(
         skippedDone++;
         continue;
       }
+      // A live claim must retain its generation. Resetting it to pending lets
+      // this same worker process claim the row again while the older request
+      // is still in flight, and both requests share the same workerId.
+      if (prior?.status === "processing") {
+        continue;
+      }
       if (prior) {
         idsToReset.push(prior.id);
       } else {
@@ -152,7 +158,13 @@ export async function enqueueChapterTranslations(
       const chunk = idsToReset.slice(i, i + INSERT_CHUNK);
       await tx
         .update(translations)
-        .set({ status: "pending", errorMessage: null, updatedAt: now })
+        .set({
+          status: "pending",
+          errorMessage: null,
+          claimedBy: null,
+          leaseExpiresAt: null,
+          updatedAt: now,
+        })
         .where(inArray(translations.id, chunk));
     }
     await tx

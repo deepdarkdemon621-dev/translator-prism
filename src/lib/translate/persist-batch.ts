@@ -60,11 +60,6 @@ const OWNED_FRESH_GUARD = `EXISTS (
     AND pg.source_text = ?
 )`;
 
-const OWNED_GUARD = `EXISTS (
-  SELECT 1 FROM translations tg
-  WHERE tg.id = ? AND tg.status = 'processing' AND tg.claimed_by = ?
-)`;
-
 export async function persistTranslationBatch(
   input: PersistBatchInput,
 ): Promise<PersistBatchResult> {
@@ -152,7 +147,7 @@ export async function persistTranslationBatch(
                status, quality_codes, error_message, tokens_used, is_active,
                created_at)
             SELECT ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?
-            WHERE ${OWNED_GUARD}`,
+            WHERE ${OWNED_FRESH_GUARD}`,
       args: [
         randomUUID(),
         item.translationId,
@@ -171,6 +166,7 @@ export async function persistTranslationBatch(
         nowIso,
         item.translationId,
         input.workerId,
+        item.sourceText,
       ],
     });
     canonicalIndex.push({
@@ -183,7 +179,11 @@ export async function persistTranslationBatch(
             SET status = 'failed', error_message = ?, last_provider = ?,
                 last_error_code = ?, claimed_by = NULL, lease_expires_at = NULL,
                 updated_at = ?
-            WHERE id = ? AND status = 'processing' AND claimed_by = ?`,
+            WHERE id = ? AND status = 'processing' AND claimed_by = ?
+              AND EXISTS (
+                SELECT 1 FROM paragraphs pg
+                WHERE pg.id = translations.paragraph_id AND pg.source_text = ?
+              )`,
       args: [
         item.errorMessage,
         item.provider,
@@ -191,6 +191,7 @@ export async function persistTranslationBatch(
         nowIso,
         item.translationId,
         input.workerId,
+        item.sourceText,
       ],
     });
   }

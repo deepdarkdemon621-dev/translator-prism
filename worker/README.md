@@ -1,8 +1,9 @@
 # Prism Worker
 
-The worker polls Turso for pending translation rows and processes them using
-the LLM on this machine. It is separate from the Vercel-hosted Next.js app —
-the app just writes `pending` rows to the DB.
+The worker polls Turso for pending translation rows and sends chapter batches
+to one explicitly approved Claude Code or Codex CLI provider. It is separate
+from the Vercel-hosted Next.js app — the app just writes `pending` rows to the
+DB.
 
 ## Files
 
@@ -27,12 +28,11 @@ logs/
 2. Copy `.env.worker.example` to `.env.worker` and fill in:
    - `TURSO_DATABASE_URL` — the Turso URL (same value as Vercel's env var)
    - `TURSO_AUTH_TOKEN` — the Turso auth token
-   - `LLM_PROVIDER` — typically `ollama`
-   - `LLM_PROVIDER_BASE_URL` — e.g. `http://localhost:11434/v1`
-   - `LLM_MODEL` — the model you run locally (e.g. `qwen2.5:7b`)
+   - `TRANSLATION_PROVIDER_CHAIN` — exactly `claude-code` or `codex`
+   - the matching enable/model variables for that CLI
 
-3. Make sure your LLM is running (e.g. `ollama serve` — Ollama on Windows runs
-   as a background service automatically once installed).
+3. Confirm the selected CLI is installed and authenticated with
+   `claude --version` or `codex --version`. Do not add a local LLM fallback.
 
 ## Running in the foreground (for testing)
 
@@ -161,8 +161,8 @@ lease-based: each claimed row records `claimed_by` (this worker's
 `WORKER_LEASE_HEARTBEAT_MS` while in flight). There is no full-table
 `processing → pending` reset anymore — after a crash, the crashed worker's
 rows become claimable again automatically once their leases expire, and all
-result writes are guarded by `claimed_by`, so a stale owner can never
-overwrite newer work.
+result writes are guarded by `claimed_by` and the claim-time source text.
+Repeated enqueue also leaves active `processing` rows untouched.
 
 Each claim takes one chapter + one target language, ordered by paragraph
 sequence, bounded by `WORKER_BATCH_SIZE` and optionally
@@ -171,13 +171,22 @@ commit in one Turso write batch (with attempt history in
 `translation_attempts` and a run record in `translation_runs`) even when
 sibling items are rejected.
 
-## Switching LLM backends
+## Selecting the CLI provider
 
-Edit `.env.worker`:
-- Ollama → llama.cpp server: change `LLM_PROVIDER_BASE_URL`
-- Local → OpenAI: set `LLM_PROVIDER=openai` and `LLM_API_KEY`
-- Local → Claude: set `LLM_PROVIDER=claude` and `LLM_API_KEY` (or
-  `ANTHROPIC_API_KEY`)
+Use exactly one provider per approved run. For Codex:
+
+```env
+TRANSLATION_PROVIDER_CHAIN=codex
+CODEX_CLI_ENABLED=true
+CODEX_CLI_MODEL=gpt-5.6-sol
+CODEX_CLI_REASONING_EFFORT=high
+CODEX_CLI_ALLOW_BYPASS=false
+WORKER_CLAUDE_WINDOW_ONLY=false
+```
+
+For Claude Code, use the example in the next section. Do not append `ollama`
+or another fallback provider; quota, auth, and model errors must remain
+visible.
 
 Then restart with env reload:
 
@@ -187,7 +196,7 @@ npx pm2 restart prism-worker --update-env
 
 Plain `restart` without `--update-env` keeps the old env values.
 
-## Weekend CLI-provider mode
+## Claude CLI-provider mode
 
 Use this when you want Claude Code to translate the existing
 `pending` queue while preserving the worker's normal DB claim/write/retry
@@ -263,7 +272,7 @@ trying Claude during that window and stops claiming new work after 10:00 JST.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `pm2 list` shows `online` but `0b mem` / `0 cpu` | Stale daemon state | `npx pm2 restart prism-worker` |
-| Logs say `ECONNREFUSED localhost:11434` | Ollama not running | Start Ollama, restart worker |
+| CLI command is not found | Claude Code or Codex is not installed/in `PATH` | Verify `claude --version` or `codex --version`, then restart |
 | `failed` rows piling up in `translations` | Model or network issue | `npx pm2 logs prism-worker` for the last stack trace |
 | Rows stuck in `processing` after a crash | Lease not yet expired | Wait `WORKER_LEASE_MS` (default 10 min); the next claim recovers them |
 | Translations happen but don't appear in the reader | Browser cached the old chapter | Refresh the chapter page |

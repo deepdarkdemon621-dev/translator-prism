@@ -58,14 +58,15 @@
 
 硬性规则：
 
-- 只认领 `pending`，不要覆盖 `done`。
-- 不新增重复的 `(paragraph_id, lang)` 行。当前数据库没有依赖唯一索引来替你
-  阻止重复。
+- 只认领 `pending` 或租约已过期的 `processing`，不要覆盖 `done`。
+- 不新增重复的 `(paragraph_id, lang)` 行。生产数据库已有唯一索引，但调用方
+  仍必须使用现有的 conflict-safe 写入路径。
 - 不修改原文、段落顺序、章节 HTML、书籍归属或阅读进度。
-- 不绕过 `executor.ts` 的成功/失败写回和 `checkChapterDone()`。
+- 不绕过 `runClaimedTranslationBatch()`、`persistTranslationBatch()` 和
+  `refreshChaptersStatus()`。
 - 不打印、提交或复制 `.env.worker`、Turso token、API key。
-- 同一 Turso 数据库只能运行一个 Worker。Worker 启动时会把全部
-  `processing` 重置为 `pending`，多 Worker 会互相抢任务。
+- 同一 Turso 数据库只运行一个 Worker。租约是崩溃恢复的安全网，不把当前
+  实现当成多 Worker 调度器。
 
 ## 存储与写入优化（ARCH-002）当前状态
 
@@ -74,7 +75,7 @@
 - `docs/superpowers/specs/2026-07-24-ai-translation-storage-optimization-design.md`
 - `docs/superpowers/plans/2026-07-24-ai-translation-storage-optimization.md`
 
-2026-07-24 由 Claude 完成本地实现（代码已在本 checkout，生产尚未应用）：
+2026-07-24 由 Claude 完成实现并已应用生产数据迁移：
 
 - 迁移 `0013_translation_execution.sql`：`translation_runs`、
   `translation_attempts`、`translations.claimed_by/lease_expires_at`，
@@ -112,6 +113,15 @@
 3. ✅ 迁移 `0014` 唯一索引：`7c588c5` 已推送，随 Vercel 构建应用到生产。
 4. ⬜ 真实 Worker canary/长跑：仍需每次向用户确认 provider/model/运行窗口/
    停止条件后才能启动。
+
+同日 Codex 上线前复核补充：
+
+- failed/rejected attempt 与 canonical 失败写回也检查领取时源文，源文已变化
+  时整项跳过，不能用旧请求污染新源文状态。
+- 重复 enqueue 跳过仍在 `processing` 的行，避免同一进程用相同 `workerId`
+  产生旧/新两个并发请求。
+- `CODEX_CLI_REASONING_EFFORT` 会实际传给 Codex CLI，同时记录到 run；审计值
+  与真实调用参数保持一致。
 
 开发/测试仍只能使用临时 `file:` 数据库；注意任何推送都会经 Vercel 构建
 自动执行未应用的 migration，新迁移必须在推送前充分验证。
@@ -178,6 +188,7 @@ Codex 进程。首次接手仍建议从小批量开始：
 TRANSLATION_PROVIDER_CHAIN=codex
 CODEX_CLI_ENABLED=true
 CODEX_CLI_MODEL=gpt-5.6-sol
+CODEX_CLI_REASONING_EFFORT=high
 CODEX_CLI_ALLOW_BYPASS=false
 WORKER_CLAUDE_WINDOW_ONLY=false
 WORKER_CONCURRENCY=1

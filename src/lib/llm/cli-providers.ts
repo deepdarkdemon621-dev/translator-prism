@@ -198,6 +198,13 @@ export class CodexCliProvider implements LLMProvider {
 function buildCodexArgs(useModel: string): string[] {
   const args = ["exec"];
   if (useModel) args.push("-m", useModel);
+  const reasoningEffort = process.env.CODEX_CLI_REASONING_EFFORT?.trim();
+  if (reasoningEffort) {
+    args.push(
+      "-c",
+      `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`,
+    );
+  }
   args.push("-s", "read-only", "--ephemeral", "--json");
   if (process.env.CODEX_CLI_ALLOW_BYPASS === "true") {
     args.push("--dangerously-bypass-approvals-and-sandbox");

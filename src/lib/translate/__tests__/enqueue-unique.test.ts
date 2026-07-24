@@ -173,6 +173,36 @@ describe("uniqueness-safe translation inserts", () => {
     expect(await countByKey(paragraphIds[0], "en")).toBe(1); // en side still enqueued
   });
 
+  it("does not reset a translation that is already processing", async () => {
+    const { chapterId, paragraphIds } = await seedChapter(1);
+    const processingId = randomUUID();
+    await db.insert(schema.translations).values({
+      id: processingId,
+      paragraphId: paragraphIds[0],
+      lang: "zh",
+      status: "processing",
+      claimedBy: "worker:active",
+      leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+    }).run();
+
+    const { enqueueChapterTranslations } = await import("@/lib/translate/enqueue");
+    const result = await enqueueChapterTranslations(chapterId, "ja");
+
+    expect(result.queued).toBe(1);
+    const processing = await db
+      .select()
+      .from(schema.translations)
+      .where(eq(schema.translations.id, processingId))
+      .get();
+    expect(processing).toMatchObject({
+      status: "processing",
+      claimedBy: "worker:active",
+      leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    expect(await countByKey(paragraphIds[0], "zh")).toBe(1);
+    expect(await countByKey(paragraphIds[0], "en")).toBe(1);
+  });
+
   it("never violates the 0014 unique index on repeated enqueue", async () => {
     // Migration 0014 creates the index; prove it exists and enqueue
     // coexists with it.

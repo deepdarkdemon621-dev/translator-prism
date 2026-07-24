@@ -254,6 +254,44 @@ describe("persistTranslationBatch", () => {
     expect(await db.select().from(schema.translationAttempts).all()).toEqual([]);
   });
 
+  it("skips failed commits when the source hash is stale", async () => {
+    const { translationId, paragraphId } = await seedClaimedTranslation();
+    await db
+      .update(schema.paragraphs)
+      .set({ sourceText: "改稿された原文" })
+      .where(eq(schema.paragraphs.id, paragraphId))
+      .run();
+
+    const result = await persistTranslationBatch(
+      basePersist({
+        failed: [
+          {
+            translationId,
+            sourceText: "彼は静かに頷いた。",
+            candidateText: "旧原文に対する候補",
+            reasons: ["residual_source_script"],
+            attemptStatus: "rejected",
+            errorCode: "invalid_output",
+            errorMessage: "[invalid_output] rejected: residual_source_script",
+            provider: "claude-code",
+            model: "claude-code:sonnet",
+          },
+        ],
+      }),
+    );
+
+    expect(result.committedFailed).toEqual([]);
+    expect(result.skipped).toEqual([translationId]);
+    const row = await db
+      .select()
+      .from(schema.translations)
+      .where(eq(schema.translations.id, translationId))
+      .get();
+    expect(row?.status).toBe("processing");
+    expect(row?.claimedBy).toBe(WORKER);
+    expect(await db.select().from(schema.translationAttempts).all()).toEqual([]);
+  });
+
   it("skips commits from a worker that no longer owns the lease", async () => {
     const { translationId } = await seedClaimedTranslation({
       claimedBy: "other:9:z",
