@@ -80,8 +80,56 @@ export const translations = sqliteTable("translations", {
   retryCount: integer("retry_count").notNull().default(0),
   lastProvider: text("last_provider"),
   lastErrorCode: text("last_error_code"),
+  // Lease-based claiming (migration 0013). claimed_by identifies the worker
+  // instance ("<hostname>:<pid>:<uuid>"); only rows whose lease has expired
+  // may be reclaimed. Both are NULL when the row is not being processed.
+  claimedBy: text("claimed_by"),
+  leaseExpiresAt: text("lease_expires_at"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// One row per authorized worker execution. Audit boundary for provider/
+// model/prompt changes: every attempt written during a run links back here.
+export const translationRuns = sqliteTable("translation_runs", {
+  id: text("id").primaryKey(),
+  provider: text("provider").notNull(),
+  model: text("model").notNull(),
+  reasoningEffort: text("reasoning_effort"),
+  promptVersion: text("prompt_version").notNull(),
+  workerId: text("worker_id").notNull(),
+  status: text("status").notNull().default("running"), // running | stopped | completed | failed
+  startedAt: text("started_at").notNull(),
+  finishedAt: text("finished_at"),
+  claimedCount: integer("claimed_count").notNull().default(0),
+  doneCount: integer("done_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+});
+
+// One row per generated/rejected/failed/imported/superseded candidate.
+// translations.text stays canonical for the website; the active attempt
+// (is_active=1, at most one per translation via partial unique index)
+// mirrors it and preserves provenance. legacy_translation_id records the
+// original row id when a duplicate translation row is archived here before
+// deletion by the controlled dedupe tool.
+export const translationAttempts = sqliteTable("translation_attempts", {
+  id: text("id").primaryKey(),
+  translationId: text("translation_id").notNull()
+    .references(() => translations.id, { onDelete: "cascade" }),
+  runId: text("run_id").references(() => translationRuns.id),
+  legacyTranslationId: text("legacy_translation_id"),
+  provider: text("provider"),
+  model: text("model"),
+  reasoningEffort: text("reasoning_effort"),
+  promptVersion: text("prompt_version").notNull(),
+  sourceHash: text("source_hash").notNull(),
+  text: text("text").notNull().default(""),
+  status: text("status").notNull(), // accepted | rejected | failed | superseded | imported
+  qualityCodes: text("quality_codes"), // JSON array of warning/rejection codes
+  errorMessage: text("error_message"),
+  tokensUsed: integer("tokens_used"),
+  isActive: integer("is_active").notNull().default(0),
+  createdAt: text("created_at").notNull(),
 });
 
 export const readingProgress = sqliteTable("reading_progress", {
