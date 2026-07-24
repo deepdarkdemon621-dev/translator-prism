@@ -16,7 +16,9 @@
     "read:worker": "tsx scripts/read.ts --env .env.worker",
     "books": "tsx scripts/read.ts --list --env .env.worker",
     "worker": "tsx worker/index.ts",
-    "worker:pm2": "pm2 start worker/ecosystem.config.cjs"
+    "worker:pm2": "pm2 start worker/ecosystem.config.cjs",
+    "translations:audit": "tsx scripts/audit-translations.ts",
+    "translations:dedupe": "tsx scripts/dedupe-translations.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.87.0",
