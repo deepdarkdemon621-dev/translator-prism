@@ -4,6 +4,7 @@ import { ensureDataDir } from "@/lib/db/init";
 import { books, chapters, paragraphs, translations } from "@/lib/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { getCoversStorage } from "@/lib/storage";
+import { dedupeImportTranslationRows } from "@/lib/translate/import-dedupe";
 import { randomUUID } from "crypto";
 
 const MAX_SIZE = 150 * 1024 * 1024; // 150MB — full novel with all translations ≈ 20-50MB
@@ -188,6 +189,14 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // External payloads can carry more than one entry per (paragraph, lang);
+  // land at most one row per key so the eventual 0014 unique index holds.
+  const { rows: uniqueTranslationRows, dropped } =
+    dedupeImportTranslationRows(translationRows);
+  if (dropped > 0) {
+    console.warn(`Import dropped ${dropped} duplicate translation row(s)`);
+  }
+
   await db.transaction(async (tx) => {
     await tx.insert(books).values({
       id: bookId,
@@ -211,14 +220,14 @@ export async function POST(request: NextRequest) {
     for (let i = 0; i < paragraphRows.length; i += 500) {
       await tx.insert(paragraphs).values(paragraphRows.slice(i, i + 500));
     }
-    for (let i = 0; i < translationRows.length; i += 500) {
-      await tx.insert(translations).values(translationRows.slice(i, i + 500));
+    for (let i = 0; i < uniqueTranslationRows.length; i += 500) {
+      await tx.insert(translations).values(uniqueTranslationRows.slice(i, i + 500));
     }
   });
 
   const chapterCount = chapterRows.length;
   const paragraphCount = paragraphRows.length;
-  const translationCount = translationRows.length;
+  const translationCount = uniqueTranslationRows.length;
 
   return NextResponse.json({
     id: bookId,

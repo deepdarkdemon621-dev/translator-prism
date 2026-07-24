@@ -22,6 +22,42 @@ export interface EnqueueResult {
 // of parameters for our row width; matches the upload route's batch size.
 const INSERT_CHUNK = 500;
 
+// Compound-select chunk size for the conditional pending insert below.
+// SQLITE_MAX_COMPOUND_SELECT defaults to 500 terms; stay under it.
+const CONDITIONAL_INSERT_CHUNK = 400;
+
+/**
+ * Insert pending translation rows only where no row for the same
+ * (paragraph_id, lang) exists yet. A concurrent enqueue can insert the same
+ * key between a caller's existence read and its write transaction; there is
+ * no unique index to lean on until gated migration 0014, so every row is
+ * guarded with NOT EXISTS. One statement per chunk.
+ */
+export async function insertPendingTranslationsIfAbsent(
+  executor: Pick<ReturnType<typeof getDb>, "run">,
+  rows: { id: string; paragraphId: string; lang: string }[],
+  now: string,
+): Promise<void> {
+  for (let i = 0; i < rows.length; i += CONDITIONAL_INSERT_CHUNK) {
+    const chunk = rows.slice(i, i + CONDITIONAL_INSERT_CHUNK);
+    const candidates = sql.join(
+      chunk.map(
+        (row) =>
+          sql`SELECT ${row.id} AS id, ${row.paragraphId} AS paragraph_id, ${row.lang} AS lang`,
+      ),
+      sql` UNION ALL `,
+    );
+    await executor.run(sql`
+      INSERT INTO translations (id, paragraph_id, lang, status, created_at, updated_at)
+      SELECT c.id, c.paragraph_id, c.lang, 'pending', ${now}, ${now}
+      FROM (${candidates}) AS c
+      WHERE NOT EXISTS (
+        SELECT 1 FROM translations t
+        WHERE t.paragraph_id = c.paragraph_id AND t.lang = c.lang
+      )`);
+  }
+}
+
 export async function enqueueChapterTranslations(
   chapterId: string,
   sourceLang: string,
@@ -59,12 +95,19 @@ export async function enqueueChapterTranslations(
     .where(inArray(translations.paragraphId, paraIds))
     .all();
 
+  // Prefer the done row when a key already has duplicates (production data
+  // predates the uniqueness invariant): a completed translation must never
+  // be reset or replaced because a stale sibling row was read last.
   const existingByParaLang = new Map<string, (typeof existing)[number]>();
   for (const t of existing) {
-    existingByParaLang.set(`${t.paragraphId}|${t.lang}`, t);
+    const key = `${t.paragraphId}|${t.lang}`;
+    const prior = existingByParaLang.get(key);
+    if (!prior || (prior.status !== "done" && t.status === "done")) {
+      existingByParaLang.set(key, t);
+    }
   }
 
-  const toInsert: (typeof translations.$inferInsert)[] = [];
+  const toInsert: { id: string; paragraphId: string; lang: string }[] = [];
   const idsToReset: string[] = [];
   let queued = 0;
   let skippedDone = 0;
@@ -84,7 +127,6 @@ export async function enqueueChapterTranslations(
           id: randomUUID(),
           paragraphId: para.id,
           lang,
-          status: "pending",
         });
       }
       queued++;
@@ -103,10 +145,7 @@ export async function enqueueChapterTranslations(
 
   const now = new Date().toISOString();
   await db.transaction(async (tx) => {
-    for (let i = 0; i < toInsert.length; i += INSERT_CHUNK) {
-      const chunk = toInsert.slice(i, i + INSERT_CHUNK);
-      await tx.insert(translations).values(chunk);
-    }
+    await insertPendingTranslationsIfAbsent(tx, toInsert, now);
     // All resets share the same SET clause, so one UPDATE per chunk covers
     // every prior row — no need to loop per row.
     for (let i = 0; i < idsToReset.length; i += INSERT_CHUNK) {
