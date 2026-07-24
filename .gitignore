@@ -42,6 +42,9 @@ yarn-error.log*
 AI_TASK_BOARD.md
 AI_SESSION_ENTRY.md
 AI_HANDOFF_SUMMARY.md
+task_plan.md
+findings.md
+progress.md
 skills-lock.json
 .worktrees/
 
