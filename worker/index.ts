@@ -75,6 +75,9 @@ function requestShutdown(signal: string) {
 
 process.on("SIGINT", () => requestShutdown("SIGINT"));
 process.on("SIGTERM", () => requestShutdown("SIGTERM"));
+process.on("message", (message) => {
+  if (message === "shutdown") requestShutdown("PM2 shutdown");
+});
 process.on("exit", () => releaseWorkerLock(LOCK_FILE));
 
 async function getStatusCounts(): Promise<Record<string, number>> {

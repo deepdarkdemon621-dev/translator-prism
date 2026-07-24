@@ -49,10 +49,29 @@ export function runCli(options: CliRunOptions): Promise<CliRunResult> {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let settled = false;
+
+    const rejectOnce = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    };
+
+    const resolveOnce = (result: CliRunResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
 
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
+      // On Windows, descendants can retain the stdio handles after the
+      // spawned CLI exits, so Node may never emit "close". The timeout is the
+      // operation boundary; reject immediately instead of waiting forever.
+      rejectOnce(new Error(`CLI process timed out after ${options.timeoutMs}ms`));
     }, options.timeoutMs);
 
     child.stdout?.setEncoding("utf8");
@@ -69,24 +88,19 @@ export function runCli(options: CliRunOptions): Promise<CliRunResult> {
     });
 
     child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
+      rejectOnce(err);
     });
 
     child.on("close", (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        reject(new Error(`CLI process timed out after ${options.timeoutMs}ms`));
-        return;
-      }
+      if (timedOut) return;
 
       if (code !== 0) {
         const detail = stderr.trim() || stdout.trim() || `exit code ${code}`;
-        reject(new Error(detail));
+        rejectOnce(new Error(detail));
         return;
       }
 
-      resolve({ stdout, stderr });
+      resolveOnce({ stdout, stderr });
     });
 
     if (options.stdin) child.stdin?.write(options.stdin);

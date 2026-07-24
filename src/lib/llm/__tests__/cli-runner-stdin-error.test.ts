@@ -37,6 +37,27 @@ describe("CLI runner stdin errors", () => {
       }),
     ).resolves.toMatchObject({ stdout: "", stderr: "" });
   });
+
+  it("rejects on timeout even when the child never emits close", async () => {
+    vi.doMock("node:child_process", () => ({
+      spawn: vi.fn(() => createChildThatNeverCloses()),
+    }));
+    const { runCli } = await import("../cli-runner");
+
+    const outcome = Promise.race([
+      runCli({
+        command: "fake-cli",
+        args: [],
+        stdin: "",
+        timeoutMs: 10,
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("runCli did not settle")), 100),
+      ),
+    ]);
+
+    await expect(outcome).rejects.toThrow("CLI process timed out");
+  });
 });
 
 function createChildThatClosesBeforeStdinIsConsumed() {
@@ -79,5 +100,19 @@ function createChildWithoutStdin() {
   child.kill = () => {};
   queueMicrotask(() => child.emit("close", 0));
 
+  return child;
+}
+
+function createChildThatNeverCloses() {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter & { setEncoding: () => void };
+    stderr: EventEmitter & { setEncoding: () => void };
+    stdin: null;
+    kill: () => void;
+  };
+  child.stdout = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+  child.stderr = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+  child.stdin = null;
+  child.kill = () => {};
   return child;
 }
