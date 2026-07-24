@@ -27,6 +27,55 @@ export function parseClaudeCliOutput(stdout: string): string {
   );
 }
 
+export interface ParsedBatchTranslation {
+  id: string;
+  text: string;
+}
+
+/**
+ * Parse a `{"translations":[{"id","text"}]}` payload. Deliberately lenient at
+ * item level: malformed entries are skipped and duplicate/unknown/empty items
+ * pass through, so one bad item cannot fail its valid siblings. Per-item
+ * acceptance is the validation layer's job (translation-validation.ts); only
+ * a payload with no usable translations array is a whole-batch parse error.
+ */
+export function parseBatchTranslationsJson(value: string): ParsedBatchTranslation[] {
+  const json = stripMarkdownFence(value);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new CliOutputError("Batch output was not valid JSON");
+  }
+
+  if (!isRecord(parsed) || !Array.isArray(parsed.translations)) {
+    throw new CliOutputError("Expected JSON object with a translations array");
+  }
+
+  const items: ParsedBatchTranslation[] = [];
+  for (const item of parsed.translations) {
+    if (
+      !isRecord(item) ||
+      typeof item.id !== "string" ||
+      !item.id.trim() ||
+      typeof item.text !== "string"
+    ) {
+      continue;
+    }
+    items.push({ id: item.id, text: item.text.trim() });
+  }
+  return items;
+}
+
+export function parseClaudeBatchCliOutput(stdout: string): ParsedBatchTranslation[] {
+  return parseBatchTranslationsJson(parseClaudeCliOutput(stdout));
+}
+
+export function parseCodexBatchCliOutput(stdout: string): ParsedBatchTranslation[] {
+  return parseBatchTranslationsJson(extractCodexAgentMessage(stdout));
+}
+
 /**
  * Extract output token count from a `claude -p --output-format json` envelope.
  * Returns 0 if the field is absent or unparseable.
@@ -43,7 +92,7 @@ export function extractClaudeTokenUsage(stdout: string): number {
   return 0;
 }
 
-export function parseCodexCliOutput(stdout: string): string {
+function extractCodexAgentMessage(stdout: string): string {
   let finalMessage: string | null = null;
 
   for (const line of stdout.split(/\r?\n/)) {
@@ -74,7 +123,11 @@ export function parseCodexCliOutput(stdout: string): string {
     throw new CliOutputError("Codex CLI did not emit a final agent message");
   }
 
-  return parseTranslationJson(stripMarkdownFence(finalMessage));
+  return finalMessage;
+}
+
+export function parseCodexCliOutput(stdout: string): string {
+  return parseTranslationJson(stripMarkdownFence(extractCodexAgentMessage(stdout)));
 }
 
 function stripMarkdownFence(value: string): string {

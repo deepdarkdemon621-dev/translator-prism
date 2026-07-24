@@ -10,6 +10,14 @@ describe("LLM error classification", () => {
     expect(classified.code).toBe("quota_exhausted");
   });
 
+  it("classifies Claude Code usage-limit reset messages as quota_exhausted", () => {
+    const classified = classifyLLMError(
+      new Error("Claude AI usage limit reached. Your limit will reset at 8:00 PM."),
+    );
+
+    expect(classified.code).toBe("quota_exhausted");
+  });
+
   it("classifies CLI auth prompts as auth_error", () => {
     const classified = classifyLLMError(
       new Error("Authentication required. Please log in to continue."),

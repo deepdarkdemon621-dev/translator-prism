@@ -116,4 +116,134 @@ describe("CLI providers", () => {
       model: "claude-code:sonnet",
     });
   });
+
+  const chapterRequest = (items: { id: string; seq: number; text: string }[]) => ({
+    bookTitle: "テスト書",
+    chapterTitle: "序章",
+    sourceLang: "ja",
+    targetLang: "zh",
+    items,
+  });
+
+  it("translates a chapter batch with one Claude CLI call", async () => {
+    mockedRunCli.mockResolvedValue({
+      stdout: claudeEnvelope(
+        JSON.stringify({
+          translations: [
+            { id: "row-1", text: "你好" },
+            { id: "row-2", text: "再见" },
+          ],
+        }),
+        9,
+      ),
+      stderr: "",
+    });
+
+    const result = await new ClaudeCodeCliProvider().translateBatch(
+      chapterRequest([
+        { id: "row-1", seq: 0, text: "こんにちは" },
+        { id: "row-2", seq: 1, text: "さようなら" },
+      ]),
+    );
+
+    expect(mockedRunCli).toHaveBeenCalledTimes(1);
+    const stdin = mockedRunCli.mock.calls[0][0].stdin as string;
+    expect(stdin).toContain("テスト書");
+    expect(stdin).toContain("序章");
+    expect(stdin).toContain("Chinese");
+    expect(stdin).toContain('"id":"row-1"');
+    expect(stdin).toContain('"seq":1');
+    expect(result).toEqual([
+      { id: "row-1", text: "你好", tokensUsed: 5, model: "claude-code:sonnet" },
+      { id: "row-2", text: "再见", tokensUsed: 5, model: "claude-code:sonnet" },
+    ]);
+  });
+
+  it("returns unknown or partial Claude batch items for the validation layer", async () => {
+    mockedRunCli.mockResolvedValue({
+      stdout: claudeEnvelope(
+        JSON.stringify({ translations: [{ id: "unexpected", text: "??" }] }),
+      ),
+      stderr: "",
+    });
+
+    const result = await new ClaudeCodeCliProvider().translateBatch(
+      chapterRequest([{ id: "row-1", seq: 0, text: "こんにちは" }]),
+    );
+
+    expect(result.map((item) => item.id)).toEqual(["unexpected"]);
+  });
+
+  it("throws when a Claude batch contains no translations at all", async () => {
+    mockedRunCli.mockResolvedValue({
+      stdout: claudeEnvelope(JSON.stringify({ translations: [] })),
+      stderr: "",
+    });
+
+    await expect(
+      new ClaudeCodeCliProvider().translateBatch(
+        chapterRequest([{ id: "row-1", seq: 0, text: "こんにちは" }]),
+      ),
+    ).rejects.toThrow(/no translations/);
+  });
+
+  it("scales the Claude batch timeout with item count", async () => {
+    process.env.CLAUDE_CODE_TIMEOUT_MS = "100000";
+    process.env.CLAUDE_CODE_BATCH_ITEM_TIMEOUT_MS = "5000";
+    mockedRunCli.mockResolvedValue({
+      stdout: claudeEnvelope(
+        JSON.stringify({ translations: [{ id: "row-1", text: "你好" }] }),
+      ),
+      stderr: "",
+    });
+
+    await new ClaudeCodeCliProvider().translateBatch(
+      chapterRequest([
+        { id: "row-1", seq: 0, text: "一" },
+        { id: "row-2", seq: 1, text: "二" },
+        { id: "row-3", seq: 2, text: "三" },
+      ]),
+    );
+
+    expect(mockedRunCli.mock.calls[0][0].timeoutMs).toBe(100_000 + 2 * 5000);
+    delete process.env.CLAUDE_CODE_TIMEOUT_MS;
+    delete process.env.CLAUDE_CODE_BATCH_ITEM_TIMEOUT_MS;
+  });
+
+  it("translates a chapter batch with one Codex CLI call", async () => {
+    process.env.CODEX_CLI_ENABLED = "true";
+    process.env.CODEX_CLI_MODEL = "gpt-5.6-sol";
+    const payload = JSON.stringify({
+      translations: [
+        { id: "row-1", text: "你好" },
+        { id: "row-2", text: "再见" },
+      ],
+    });
+    mockedRunCli.mockResolvedValue({
+      stdout: JSON.stringify({
+        type: "item.completed",
+        item: { type: "agent_message", text: payload },
+      }),
+      stderr: "",
+    });
+
+    const result = await new CodexCliProvider().translateBatch(
+      chapterRequest([
+        { id: "row-1", seq: 0, text: "こんにちは" },
+        { id: "row-2", seq: 1, text: "さようなら" },
+      ]),
+    );
+
+    expect(mockedRunCli).toHaveBeenCalledTimes(1);
+    const call = mockedRunCli.mock.calls[0][0];
+    expect(call.args).toContain("exec");
+    expect(call.args).toContain("read-only");
+    expect(call.args).toContain("--ephemeral");
+    expect(call.args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(call.stdin).toContain("テスト書");
+    expect(result).toEqual([
+      { id: "row-1", text: "你好", tokensUsed: 0, model: "codex:gpt-5.6-sol" },
+      { id: "row-2", text: "再见", tokensUsed: 0, model: "codex:gpt-5.6-sol" },
+    ]);
+  });
 });

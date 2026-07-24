@@ -49,6 +49,9 @@ export function classifyLLMError(err: unknown): ClassifiedLLMError {
     lower.includes("exceeded your current quota") ||
     lower.includes("you have exceeded your budget") ||
     lower.includes("quota exceeded") ||
+    lower.includes("usage limit reached") ||
+    lower.includes("limit will reset") ||
+    lower.includes("limit reset") ||
     lower.includes("budget exceeded") ||
     lower.includes("maximum budget") ||
     lower.includes("max budget") ||

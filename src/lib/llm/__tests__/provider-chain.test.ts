@@ -10,6 +10,8 @@ describe("ProviderChain", () => {
   beforeEach(() => {
     disabledProviders.clear();
     delete process.env.CLAUDE_CODE_CONCURRENCY;
+    delete process.env.CLAUDE_CODE_EXCLUSIVE_WITHIN_WINDOW;
+    delete process.env.CLAUDE_CODE_EXCLUSIVE_RETRY_DELAY_MS;
   });
 
   it("returns the first provider success without calling later providers", async () => {
@@ -25,6 +27,41 @@ describe("ProviderChain", () => {
     expect(await chain.translate("hello", "en", "fr")).toMatchObject({
       text: "one",
     });
+    expect(secondCalled).toBe(false);
+  });
+
+  it("returns batch results from the first batch-capable provider", async () => {
+    let secondCalled = false;
+    const first = {
+      ...fakeProvider("claude-code", async () => result("single")),
+      translateBatch: async () => [
+        { id: "row-1", text: "one", tokensUsed: 1, model: "fake" },
+        { id: "row-2", text: "two", tokensUsed: 1, model: "fake" },
+      ],
+    };
+    const second = {
+      ...fakeProvider("ollama", async () => result("local")),
+      translateBatch: async () => {
+        secondCalled = true;
+        return [];
+      },
+    };
+
+    await expect(
+      new ProviderChain([first, second]).translateBatch?.({
+        bookTitle: "Book",
+        chapterTitle: "Ch 1",
+        sourceLang: "en",
+        targetLang: "fr",
+        items: [
+          { id: "row-1", seq: 0, text: "hello" },
+          { id: "row-2", seq: 1, text: "hi" },
+        ],
+      }),
+    ).resolves.toEqual([
+      { id: "row-1", text: "one", tokensUsed: 1, model: "claude-code:fake" },
+      { id: "row-2", text: "two", tokensUsed: 1, model: "claude-code:fake" },
+    ]);
     expect(secondCalled).toBe(false);
   });
 
@@ -85,6 +122,53 @@ describe("ProviderChain", () => {
       text: "local",
     });
     expect(disabledProviders.has("claude-code")).toBe(true);
+  });
+
+  it("retries Claude quota errors instead of falling through during exclusive window", async () => {
+    process.env.CLAUDE_CODE_EXCLUSIVE_WITHIN_WINDOW = "true";
+    process.env.CLAUDE_CODE_EXCLUSIVE_RETRY_DELAY_MS = "1";
+    let calls = 0;
+    let secondCalled = false;
+    const first = {
+      ...fakeProvider("claude-code", async () => {
+        calls++;
+        if (calls === 1) throw new Error("Reached maximum budget ($0.01)");
+        return result("claude");
+      }),
+      isAvailable: () => true,
+    };
+    const second = fakeProvider("ollama", async () => {
+      secondCalled = true;
+      return result("local");
+    });
+
+    const chain = new ProviderChain([first, second]);
+
+    await expect(chain.translate("hello", "en", "fr")).resolves.toMatchObject({
+      text: "claude",
+    });
+    expect(calls).toBe(2);
+    expect(secondCalled).toBe(false);
+    expect(disabledProviders.has("claude-code")).toBe(false);
+  });
+
+  it("falls through to local provider after the Claude exclusive window closes", async () => {
+    process.env.CLAUDE_CODE_EXCLUSIVE_WITHIN_WINDOW = "true";
+    let available = true;
+    const first = {
+      ...fakeProvider("claude-code", async () => {
+        available = false;
+        throw new Error("Reached maximum budget ($0.01)");
+      }),
+      isAvailable: () => available,
+    };
+    const second = fakeProvider("ollama", async () => result("local"));
+
+    const chain = new ProviderChain([first, second]);
+
+    await expect(chain.translate("hello", "en", "fr")).resolves.toMatchObject({
+      text: "local",
+    });
   });
 
   it("does not permanently disable transient provider failures", async () => {
