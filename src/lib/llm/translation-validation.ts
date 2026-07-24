@@ -48,7 +48,7 @@ const WORD_CHAR_RE = /[\p{L}\p{N}]/u;
 const EXPLANATORY_PREFIX_RE =
   /^(here (is|are)\b|sure[,!:]|certainly[,!:]|以下是|以下为|译文[::]|翻译[::]|翻訳[::])/i;
 const REFUSAL_RE =
-  /\b(i can(?:no|')t|i cannot|i'?m sorry|i am sorry|as an ai)\b|申し訳ありません|无法翻译|不能翻译/i;
+  /\b(as an ai|(?:i'?m|i am) sorry.{0,40}\bi (?:can(?:no|')t|cannot) translate\b|i (?:can(?:no|')t|cannot) translate\b|unable to translate\b)|申し訳ありません.{0,40}翻訳|无法翻译|不能翻译/i;
 
 function normalize(text: string): string {
   return text.normalize("NFKC").replace(/\s+/g, " ").trim();

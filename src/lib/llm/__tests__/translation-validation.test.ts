@@ -136,6 +136,23 @@ describe("validateBatchResults", () => {
     expect(result.rejected[0].reasons).toContain("refusal");
   });
 
+  it("accepts ordinary dialogue containing 'I cannot'", () => {
+    const result = validateBatchResults(
+      makeInput({
+        results: [
+          {
+            id: "a",
+            text: "That may be true, but I cannot make any sense of this situation.",
+          },
+        ],
+        targetLang: "en",
+      }),
+    );
+
+    expect(result.rejected).toEqual([]);
+    expect(result.accepted).toHaveLength(1);
+  });
+
   it("warns instead of rejecting on unusual length ratio", () => {
     const longSource = "長い夜だった。".repeat(20);
     const result = validateBatchResults(
