@@ -155,14 +155,21 @@ Local restarts now replace the previous local worker automatically. If the
 lock file points at an unrelated process because the PID was reused, the worker
 reclaims the lock without killing that process.
 
-Run exactly one worker per Turso database. On startup the worker flips every
-row in `processing` back to `pending` to recover from its own crashes — if a
-second worker were running against the same DB, this reset would steal rows
-that are mid-translation on the sibling, causing double LLM spend.
+Run exactly one worker per Turso database (operational rule). Claims are
+lease-based: each claimed row records `claimed_by` (this worker's
+`hostname:pid:uuid`) and `lease_expires_at` (`WORKER_LEASE_MS`, renewed every
+`WORKER_LEASE_HEARTBEAT_MS` while in flight). There is no full-table
+`processing → pending` reset anymore — after a crash, the crashed worker's
+rows become claimable again automatically once their leases expire, and all
+result writes are guarded by `claimed_by`, so a stale owner can never
+overwrite newer work.
 
-If you need to fan out across machines later, add a `locked_until` lease
-column to `translations` and reset only rows whose lease has expired. Until
-then: one worker, one DB.
+Each claim takes one chapter + one target language, ordered by paragraph
+sequence, bounded by `WORKER_BATCH_SIZE` and optionally
+`WORKER_BATCH_MAX_CHARS`. Results go through per-item validation; valid items
+commit in one Turso write batch (with attempt history in
+`translation_attempts` and a run record in `translation_runs`) even when
+sibling items are rejected.
 
 ## Switching LLM backends
 
@@ -182,36 +189,32 @@ Plain `restart` without `--update-env` keeps the old env values.
 
 ## Weekend CLI-provider mode
 
-Use this when you want Claude Code or Codex to translate the existing
+Use this when you want Claude Code to translate the existing
 `pending` queue while preserving the worker's normal DB claim/write/retry
 logic. Do not ask an interactive Claude Code/Codex chat session to write
 translations directly into the database; let `prism-worker` remain the queue
 owner.
 
-Keep your local LLM running. It is the fallback after CLI quota, budget, auth,
-or model failures.
+This mode intentionally does not fall back to the local LLM. When the Claude
+window closes, the worker stays online but stops claiming new translation rows.
 
 Example `.env.worker`:
 
 ```env
-TRANSLATION_PROVIDER_CHAIN=claude-code,codex,ollama
+TRANSLATION_PROVIDER_CHAIN=claude-code
 
 CLAUDE_CODE_ENABLED=true
 CLAUDE_CODE_COMMAND=claude
 CLAUDE_CODE_MODEL=sonnet
 CLAUDE_CODE_TIMEOUT_MS=120000
-CLAUDE_CODE_MAX_BUDGET_USD=0.05
+CLAUDE_CODE_MAX_BUDGET_USD=
 CLAUDE_CODE_BARE=false
 CLAUDE_CODE_CONCURRENCY=1
-CLAUDE_CODE_ALLOWED_WEEKLY_WINDOW=FRI 18:00-SAT 09:30
+CLAUDE_CODE_ALLOWED_WEEKLY_WINDOW=FRI 00:00-SAT 10:00
 CLAUDE_CODE_WINDOW_TZ=Asia/Tokyo
-
-CODEX_CLI_ENABLED=true
-CODEX_CLI_COMMAND=codex
-CODEX_CLI_MODEL=
-CODEX_CLI_TIMEOUT_MS=120000
-CODEX_CLI_ALLOW_BYPASS=false
-CODEX_CLI_CONCURRENCY=1
+CLAUDE_CODE_EXCLUSIVE_WITHIN_WINDOW=true
+CLAUDE_CODE_EXCLUSIVE_RETRY_DELAY_MS=60000
+WORKER_CLAUDE_WINDOW_ONLY=true
 
 WORKER_REQUEUE_FAILED_WHEN_IDLE=true
 WORKER_FAILED_RETRY_LIMIT=2
@@ -227,11 +230,15 @@ npx pm2 restart prism-worker --update-env
 Expected behavior:
 
 - The worker tries `claude-code` first.
-- Outside `CLAUDE_CODE_ALLOWED_WEEKLY_WINDOW`, the worker skips `claude-code`
-  without marking the row failed and continues to the next provider.
-- If Claude Code hits quota/budget/auth/model failure, the provider is disabled
-  for this worker process and the same row falls through to Codex.
-- If Codex also fails permanently, the row falls through to Ollama/local LLM.
+- Outside `CLAUDE_CODE_ALLOWED_WEEKLY_WINDOW`, the worker does not claim new
+  rows, so pending translations remain pending for the next run/window.
+- If `CLAUDE_CODE_EXCLUSIVE_WITHIN_WINDOW=true`, Claude Code quota/rate-limit
+  failures are retried during the allowed window instead of falling through.
+- Once the Claude Code window closes, in-flight translations finish and the
+  worker pauses before claiming more rows.
+- Outside exclusive-window mode, if Claude Code hits quota/budget/auth/model
+  failure, the provider is disabled for this worker process and the same row
+  fails because no fallback provider is configured.
 - Re-enabling a disabled CLI provider requires a worker restart:
   `npx pm2 restart prism-worker --update-env`.
 
@@ -247,8 +254,9 @@ Code subprocess. This lets Claude Code use your local subscription login even
 when `.env.local` contains an API key for the SDK-based provider.
 
 For Claude subscription quota that resets every Saturday at 10:00 Japan time,
-set the window to end before reset, for example `FRI 18:00-SAT 09:30`. This
-uses the remaining weekly quota after work and protects the new week's quota.
+set the window to end at the reset boundary, for example
+`FRI 00:00-SAT 10:00`. With exclusive-window mode enabled, the worker keeps
+trying Claude during that window and stops claiming new work after 10:00 JST.
 
 ## Troubleshooting
 
@@ -257,5 +265,5 @@ uses the remaining weekly quota after work and protects the new week's quota.
 | `pm2 list` shows `online` but `0b mem` / `0 cpu` | Stale daemon state | `npx pm2 restart prism-worker` |
 | Logs say `ECONNREFUSED localhost:11434` | Ollama not running | Start Ollama, restart worker |
 | `failed` rows piling up in `translations` | Model or network issue | `npx pm2 logs prism-worker` for the last stack trace |
-| `Reset N stuck 'processing' rows` on every start | Previous worker crashed mid-job | Normal recovery — if it happens every restart, investigate crashes |
+| Rows stuck in `processing` after a crash | Lease not yet expired | Wait `WORKER_LEASE_MS` (default 10 min); the next claim recovers them |
 | Translations happen but don't appear in the reader | Browser cached the old chapter | Refresh the chapter page |

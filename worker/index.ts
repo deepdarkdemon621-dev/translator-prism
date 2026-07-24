@@ -1,9 +1,11 @@
-// SINGLE-WORKER INVARIANT
-// This worker is designed to run exactly once per project on the user's
-// local machine, supervised by PM2. `resetStaleProcessing()` below flips
-// EVERY row in 'processing' back to 'pending' on startup, which is only safe
-// under that assumption. Startup lock handling stops a previous local worker
-// before this process begins polling.
+// SINGLE-WORKER INVARIANT (operational)
+// This worker is designed to run once per project on the user's local
+// machine, supervised by PM2. Claims are lease-based (ARCH-002): a
+// 'processing' row can only be reclaimed after its lease expires, so a
+// crashed worker's rows recover on their own without the old full-table
+// processing reset, and a second worker can no longer steal live work.
+// Operationally we still run exactly one worker; startup lock handling stops
+// a previous local worker before this process begins polling.
 import { config as loadEnv } from "dotenv";
 import path from "path";
 
@@ -15,15 +17,34 @@ loadEnv({ path: path.join(process.cwd(), ".env.local") });
 loadEnv();
 
 import { getLibsqlClient } from "../src/lib/db";
-import { runTranslation } from "../src/lib/llm/executor";
+import { CHAPTER_BATCH_PROMPT_VERSION } from "../src/lib/llm/cli-providers";
+import { getConfiguredProvider } from "../src/lib/llm/executor";
+import { runClaimedTranslationBatch } from "../src/lib/translate/run-claimed-batch";
+import {
+  finishTranslationRun,
+  recordRunCounts,
+  startTranslationRun,
+} from "../src/lib/translate/run-lifecycle";
+import {
+  claimTranslationBatch,
+  makeWorkerId,
+  startLeaseHeartbeat,
+} from "./claim";
 import { acquireWorkerLock, releaseWorkerLock } from "./lock";
 import { requeueEligibleFailedTranslations } from "./failed-requeue";
 import { startWorkerPet, type WorkerPet } from "./pet";
 import { createProgressTracker } from "./progress";
 import { runRecoverableWorkerStep } from "./resilience";
+import { shouldClaimTranslationWork } from "./schedule";
 
 const POLL_INTERVAL = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 2000);
 const CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? 2);
+const BATCH_SIZE = Math.max(1, Number(process.env.WORKER_BATCH_SIZE ?? 1));
+const BATCH_MAX_CHARS = process.env.WORKER_BATCH_MAX_CHARS
+  ? Math.max(1, Number(process.env.WORKER_BATCH_MAX_CHARS))
+  : undefined;
+const LEASE_MS = Number(process.env.WORKER_LEASE_MS ?? 600_000);
+const LEASE_HEARTBEAT_MS = Number(process.env.WORKER_LEASE_HEARTBEAT_MS ?? 60_000);
 const PROGRESS_LOG_INTERVAL = Number(process.env.WORKER_PROGRESS_LOG_INTERVAL_MS ?? 300_000);
 const RECOVERABLE_ERROR_RETRY_DELAY = Number(
   process.env.WORKER_RECOVERABLE_ERROR_RETRY_DELAY_MS ?? 30_000,
@@ -33,12 +54,17 @@ const FAILED_RETRY_LIMIT = Number(process.env.WORKER_FAILED_RETRY_LIMIT ?? 2);
 const FAILED_RETRY_BATCH_SIZE = Number(process.env.WORKER_FAILED_RETRY_BATCH_SIZE ?? 500);
 const LOCK_FILE = path.join(process.cwd(), ".worker.lock");
 
+const workerId = makeWorkerId();
 let shuttingDown = false;
 let inFlight = 0;
 let lastProgressLog = Date.now();
 let finalProgressLogged = false;
 const progress = createProgressTracker();
 let workerPet: WorkerPet | undefined;
+let pauseLogged = false;
+let runId: string | null = null;
+let stopLeaseHeartbeat: (() => void) | null = null;
+const inFlightIds = new Set<string>();
 
 function requestShutdown(signal: string) {
   if (shuttingDown) return;
@@ -50,37 +76,6 @@ function requestShutdown(signal: string) {
 process.on("SIGINT", () => requestShutdown("SIGINT"));
 process.on("SIGTERM", () => requestShutdown("SIGTERM"));
 process.on("exit", () => releaseWorkerLock(LOCK_FILE));
-
-async function claimOne(): Promise<string | null> {
-  const client = getLibsqlClient();
-  const now = new Date().toISOString();
-  const res = await client.execute({
-    sql: `UPDATE translations
-          SET status = 'processing', updated_at = ?
-          WHERE id = (
-            SELECT id FROM translations
-            WHERE status = 'pending'
-            ORDER BY created_at
-            LIMIT 1
-          )
-          RETURNING id`,
-    args: [now],
-  });
-  const row = res.rows[0];
-  return row ? (row.id as string) : null;
-}
-
-async function resetStaleProcessing(): Promise<void> {
-  const client = getLibsqlClient();
-  const now = new Date().toISOString();
-  const res = await client.execute({
-    sql: "UPDATE translations SET status='pending', updated_at=? WHERE status='processing'",
-    args: [now],
-  });
-  if (res.rowsAffected > 0) {
-    console.log(`[worker] Reset ${res.rowsAffected} stuck 'processing' rows to 'pending'`);
-  }
-}
 
 async function getStatusCounts(): Promise<Record<string, number>> {
   const client = getLibsqlClient();
@@ -104,6 +99,28 @@ function logMemoryProgress(force = false): void {
 async function logFinalProgress(): Promise<void> {
   const counts = await getStatusCounts();
   console.log(formatStatusCounts("[worker] final progress", counts));
+}
+
+// Run row metadata comes from env config; the actual model per result row is
+// still recorded on translations/attempts by the persistence layer.
+function describeRunConfig(): {
+  provider: string;
+  model: string;
+  reasoningEffort: string | null;
+} {
+  const chain = (process.env.TRANSLATION_PROVIDER_CHAIN ?? "").trim();
+  const models: string[] = [];
+  if (chain.includes("claude-code")) {
+    models.push(`claude-code:${process.env.CLAUDE_CODE_MODEL || "sonnet"}`);
+  }
+  if (chain.includes("codex")) {
+    models.push(`codex:${process.env.CODEX_CLI_MODEL || "default"}`);
+  }
+  return {
+    provider: chain || "settings-default",
+    model: models.join(",") || "settings-default",
+    reasoningEffort: process.env.CODEX_CLI_REASONING_EFFORT ?? null,
+  };
 }
 
 function logRecoverableWorkerError(
@@ -133,26 +150,71 @@ async function runRecoverableStep<T>(
 
 async function loop() {
   await acquireWorkerLock({ lockFile: LOCK_FILE });
+  const client = getLibsqlClient();
+  const runConfig = describeRunConfig();
+
   while (!shuttingDown) {
-    const resetResult = await runRecoverableStep(
-      "resetStaleProcessing",
-      resetStaleProcessing,
+    const runStart = await runRecoverableStep("startTranslationRun", () =>
+      startTranslationRun({
+        client,
+        provider: runConfig.provider,
+        model: runConfig.model,
+        reasoningEffort: runConfig.reasoningEffort,
+        promptVersion: CHAPTER_BATCH_PROMPT_VERSION,
+        workerId,
+      }),
     );
-    if (resetResult.ok) break;
+    if (runStart.ok) {
+      runId = runStart.value;
+      break;
+    }
   }
-  console.log(`[worker] Starting (poll=${POLL_INTERVAL}ms, concurrency=${CONCURRENCY}, progressLog=${PROGRESS_LOG_INTERVAL}ms)`);
+
+  console.log(
+    `[worker] Starting (worker=${workerId}, run=${runId}, poll=${POLL_INTERVAL}ms, concurrency=${CONCURRENCY}, batchSize=${BATCH_SIZE}, maxChars=${BATCH_MAX_CHARS ?? "∞"}, leaseMs=${LEASE_MS}, progressLog=${PROGRESS_LOG_INTERVAL}ms)`,
+  );
+  stopLeaseHeartbeat = startLeaseHeartbeat({
+    client,
+    workerId,
+    leaseMs: LEASE_MS,
+    intervalMs: LEASE_HEARTBEAT_MS,
+    getTranslationIds: () => [...inFlightIds],
+    onError: (err) => console.warn("[worker] lease heartbeat failed:", err),
+  });
   workerPet = startWorkerPet();
 
   while (!shuttingDown) {
     logMemoryProgress();
+    if (!shouldClaimTranslationWork()) {
+      if (!pauseLogged) {
+        console.log(
+          "[worker] Claude window-only mode is outside the allowed window; pausing new claims",
+        );
+        pauseLogged = true;
+      }
+      await sleep(POLL_INTERVAL);
+      continue;
+    }
+    if (pauseLogged) {
+      console.log("[worker] Claude window reopened; resuming claims");
+      pauseLogged = false;
+    }
     if (inFlight >= CONCURRENCY) {
       await sleep(POLL_INTERVAL);
       continue;
     }
-    const claimResult = await runRecoverableStep("claimOne", claimOne);
+    const claimResult = await runRecoverableStep("claimTranslationBatch", () =>
+      claimTranslationBatch({
+        client,
+        workerId,
+        batchSize: BATCH_SIZE,
+        maxChars: BATCH_MAX_CHARS,
+        leaseMs: LEASE_MS,
+      }),
+    );
     if (!claimResult.ok) continue;
-    const id = claimResult.value;
-    if (!id) {
+    const batch = claimResult.value;
+    if (!batch || batch.items.length === 0) {
       if (inFlight === 0 && !finalProgressLogged) {
         const finalProgressResult = await runRecoverableStep(
           "logFinalProgress",
@@ -186,20 +248,66 @@ async function loop() {
     finalProgressLogged = false;
     workerPet?.notify("working");
     inFlight++;
-    progress.claimed();
-    runTranslation(id)
-      .then((status) => progress.completed(status))
+    const ids = batch.items.map((item) => item.translationId);
+    for (const id of ids) {
+      inFlightIds.add(id);
+      progress.claimed();
+    }
+    if (runId) {
+      recordRunCounts(client, runId, { claimed: ids.length }).catch(() => {});
+    }
+
+    (async () => {
+      const provider = await getConfiguredProvider();
+      return runClaimedTranslationBatch({
+        client,
+        provider,
+        batch,
+        workerId,
+        runId,
+        promptVersion: CHAPTER_BATCH_PROMPT_VERSION,
+        reasoningEffort: runConfig.reasoningEffort,
+      });
+    })()
+      .then((counts) => {
+        for (let i = 0; i < counts.done; i++) progress.completed("done");
+        for (let i = 0; i < counts.failed; i++) progress.completed("failed");
+        const untracked = counts.skipped + counts.released;
+        for (let i = 0; i < untracked; i++) progress.completed("skipped");
+        if (counts.released > 0) {
+          console.log(
+            `[worker] Released ${counts.released} unanswered item(s) back to pending`,
+          );
+        }
+        if (runId) {
+          recordRunCounts(client, runId, {
+            done: counts.done,
+            failed: counts.failed,
+          }).catch(() => {});
+        }
+      })
       .catch((err) => {
-        progress.completed("failed");
+        for (let i = 0; i < ids.length; i++) progress.completed("failed");
         workerPet?.notify("error");
-        console.error(`[worker] runTranslation(${id}) threw:`, err);
+        console.error(
+          `[worker] batch(chapter=${batch.chapterId}, lang=${batch.lang}, items=${ids.length}) threw:`,
+          err,
+        );
       })
       .finally(() => {
+        for (const id of ids) inFlightIds.delete(id);
         inFlight--;
       });
   }
 
   while (inFlight > 0) await sleep(100);
+  stopLeaseHeartbeat?.();
+  if (runId) {
+    // Unfinished leases (none normally at this point) simply expire.
+    await finishTranslationRun(client, runId, "stopped").catch((err) =>
+      console.warn("[worker] failed to close translation run:", err),
+    );
+  }
   console.log("[worker] Shutdown complete");
   workerPet?.stop();
   process.exit(0);
@@ -209,8 +317,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-loop().catch((err) => {
+loop().catch(async (err) => {
   workerPet?.stop();
+  stopLeaseHeartbeat?.();
   console.error("[worker] Fatal:", err);
+  if (runId) {
+    await finishTranslationRun(getLibsqlClient(), runId, "failed").catch(() => {});
+  }
   process.exit(1);
 });
