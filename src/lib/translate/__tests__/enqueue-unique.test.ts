@@ -157,15 +157,6 @@ describe("uniqueness-safe translation inserts", () => {
       status: "done",
       text: "完成译文",
     }).run();
-    // Pre-existing duplicate of the same key, still pending (production has
-    // 9330 of these). Enqueue must not reset it while a done row exists.
-    const duplicateId = randomUUID();
-    await db.insert(schema.translations).values({
-      id: duplicateId,
-      paragraphId: paragraphIds[0],
-      lang: "zh",
-      status: "pending",
-    }).run();
 
     const { enqueueChapterTranslations } = await import("@/lib/translate/enqueue");
     const result = await enqueueChapterTranslations(chapterId, "ja");
@@ -178,26 +169,26 @@ describe("uniqueness-safe translation inserts", () => {
       .get();
     expect(done?.status).toBe("done");
     expect(done?.text).toBe("完成译文");
-    expect(await countByKey(paragraphIds[0], "zh")).toBe(2); // unchanged, cleanup is dedupe's job
+    expect(await countByKey(paragraphIds[0], "zh")).toBe(1);
     expect(await countByKey(paragraphIds[0], "en")).toBe(1); // en side still enqueued
   });
 
-  it("stays compatible with the future 0014 unique index", async () => {
+  it("never violates the 0014 unique index on repeated enqueue", async () => {
+    // Migration 0014 creates the index; prove it exists and enqueue
+    // coexists with it.
+    const index = await client.execute(
+      "SELECT name FROM sqlite_master WHERE name = 'idx_translations_paragraph_lang'",
+    );
+    expect(index.rows).toHaveLength(1);
+
     const { chapterId, paragraphIds } = await seedChapter(2);
     const { enqueueChapterTranslations } = await import("@/lib/translate/enqueue");
     await enqueueChapterTranslations(chapterId, "ja");
-
-    // On a clean database the gated 0014 index must be creatable, and a
-    // repeat enqueue must not violate it.
-    await client.execute(
-      "CREATE UNIQUE INDEX `idx_translations_paragraph_lang` ON `translations` (`paragraph_id`, `lang`)",
-    );
     await enqueueChapterTranslations(chapterId, "ja");
     for (const paragraphId of paragraphIds) {
       expect(await countByKey(paragraphId, "zh")).toBe(1);
       expect(await countByKey(paragraphId, "en")).toBe(1);
     }
-    await client.execute("DROP INDEX `idx_translations_paragraph_lang`");
   });
 });
 

@@ -22,6 +22,10 @@ describe("lease-based chapter/language claiming", () => {
   beforeAll(async () => {
     client = createClient({ url: "file::memory:" });
     await migrate(drizzle(client, { schema }), { migrationsFolder: "./drizzle" });
+    // Claim-time duplicate suppression targets legacy pre-0014 data; the
+    // fixtures below seed duplicate (paragraph_id, lang) rows, so drop the
+    // 0014 unique index in this fixture database.
+    await client.execute("DROP INDEX IF EXISTS idx_translations_paragraph_lang");
     db = drizzle(client, { schema });
   });
 

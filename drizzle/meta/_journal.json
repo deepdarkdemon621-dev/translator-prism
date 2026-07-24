@@ -99,6 +99,13 @@
       "when": 1778700000000,
       "tag": "0013_translation_execution",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1778800000000,
+      "tag": "0014_translation_paragraph_lang_unique",
+      "breakpoints": true
     }
   ]
 }

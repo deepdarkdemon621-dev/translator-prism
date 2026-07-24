@@ -129,6 +129,9 @@ describe("applyDedupe", () => {
   beforeAll(async () => {
     client = createClient({ url: "file::memory:" });
     await migrate(drizzle(client, { schema }), { migrationsFolder: "./drizzle" });
+    // Dedupe operates on legacy pre-0014 duplicates; the fixtures seed
+    // duplicate keys, so drop the 0014 unique index in this fixture database.
+    await client.execute("DROP INDEX IF EXISTS idx_translations_paragraph_lang");
     db = drizzle(client, { schema });
   });
 
