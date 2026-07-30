@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -56,6 +56,13 @@ export function SortableGridItem({
   const bookOverCollection =
     type === "collection" && isOver && active?.data.current?.type === "book";
 
+  // The stagger-fade-in entrance animation uses fill-mode `both`, whose
+  // final keyframe (`transform: translateY(0)`) permanently overrides
+  // inline styles — exactly where dnd-kit writes its drag transforms, so
+  // nothing visibly moved while dragging. Once the entrance animation
+  // finishes, drop it for good so the sortable transforms can apply.
+  const [entranceDone, setEntranceDone] = useState(false);
+
   // Releasing a drag still dispatches a native click on the element under
   // the pointer, which would open the book/collection link inside. Arm a
   // guard while dragging and swallow that one click in the capture phase;
@@ -88,18 +95,25 @@ export function SortableGridItem({
         }
       }}
       onClick={onClick}
+      onAnimationEnd={(e) => {
+        if (e.target === e.currentTarget) setEntranceDone(true);
+      }}
       className={className}
       style={{
         ...style,
+        ...(entranceDone ? { animation: "none" } : {}),
         transform: CSS.Transform.toString(transform),
         transition,
-        opacity: isDragging ? 0.55 : undefined,
+        opacity: isDragging ? 0.7 : undefined,
         position: isDragging ? "relative" : undefined,
         zIndex: isDragging ? 10 : undefined,
         borderRadius: "0.75rem",
-        boxShadow: bookOverCollection
-          ? "0 0 0 2px var(--color-primary, #8b5e3c)"
-          : undefined,
+        boxShadow: isDragging
+          ? "0 8px 24px rgba(0,0,0,0.18)"
+          : bookOverCollection
+            ? "0 0 0 2px var(--color-primary, #8b5e3c)"
+            : undefined,
+        cursor: disabled ? undefined : isDragging ? "grabbing" : "grab",
         touchAction: disabled ? undefined : "manipulation",
       }}
     >
