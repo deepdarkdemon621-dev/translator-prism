@@ -106,6 +106,13 @@
       "when": 1778800000000,
       "tag": "0014_translation_paragraph_lang_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1778900000000,
+      "tag": "0015_library_manual_order",
+      "breakpoints": true
     }
   ]
 }

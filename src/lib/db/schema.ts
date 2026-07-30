@@ -41,6 +41,9 @@ export const books = sqliteTable("books", {
   // Display order inside the collection. Lowest wins and also
   // determines the collection cover. NULL when collectionId is NULL.
   collectionSeq: integer("collection_seq"),
+  // Manual order in the top-level library grid. NULL = never manually
+  // ordered; sorts after ordered rows by created_at DESC (migration 0015).
+  librarySeq: integer("library_seq"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
@@ -193,6 +196,9 @@ export const collections = sqliteTable("collections", {
   // symmetric to admin-public books). Regular users' collections are
   // always 'private'; the create endpoint enforces this.
   visibility: text("visibility").notNull().default("private"),
+  // Manual order in the collections grid. NULL = never manually ordered;
+  // sorts after ordered rows by updated_at DESC (migration 0015).
+  seq: integer("seq"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
 });

@@ -42,8 +42,14 @@ export async function listVisibleCollectionsWithSummaries(
 ): Promise<CollectionSummary[]> {
   const whereClause = await visibleCollectionsWhereForActor(db, actor);
   const q = db.select().from(collections);
+  // Manually ordered collections (seq set) first in their chosen order;
+  // never-ordered ones keep the old recently-updated ordering after them.
   const rows = await (whereClause ? q.where(whereClause) : q)
-    .orderBy(desc(collections.updatedAt))
+    .orderBy(
+      sql`CASE WHEN ${collections.seq} IS NULL THEN 1 ELSE 0 END`,
+      asc(collections.seq),
+      desc(collections.updatedAt),
+    )
     .all();
 
   const fullAccessIds = rows

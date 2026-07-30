@@ -3,6 +3,9 @@
 import { use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { closestCenter, DndContext, type DragEndEvent } from "@dnd-kit/core";
+import { arrayMove, SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { SortableGridItem, useLibraryDndSensors } from "@/components/library/dnd";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -70,6 +73,7 @@ export default function CollectionPage({
   const [allCollectionsLoaded, setAllCollectionsLoaded] = useState(false);
   const bookSelect = useSelection();
   const confirm = useConfirm();
+  const dndSensors = useLibraryDndSensors();
 
   const fetchAllCollections = useCallback(async () => {
     if (allCollectionsLoaded) return;
@@ -148,7 +152,12 @@ export default function CollectionPage({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ collectionId: null }),
     });
-    if (res.ok) fetchCollection();
+    if (res.ok) {
+      // Drop the row locally instead of reloading the whole detail view.
+      setCollection((prev) =>
+        prev ? { ...prev, books: prev.books.filter((b) => b.id !== bookId) } : prev,
+      );
+    }
   };
 
   const moveBy = async (bookId: string, delta: -1 | 1) => {
@@ -159,12 +168,37 @@ export default function CollectionPage({
     const next = [...collection.books];
     [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
     setCollection({ ...collection, books: next });
-    await fetch(`/api/collections/${id}/books`, {
+    const res = await fetch(`/api/collections/${id}/books`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ order: next.map((b) => b.id) }),
-    });
-    fetchCollection();
+    }).catch(() => null);
+    // The optimistic swap already matches the server result; only a
+    // failure needs the authoritative refetch.
+    if (!res?.ok) fetchCollection();
+  };
+
+  // Drag-and-drop reorder within the collection. Optimistic local update
+  // through the same PUT order API the arrow buttons use; a failure
+  // reverts via refetch.
+  const handleDragEnd = async (event: DragEndEvent) => {
+    if (!collection) return;
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = collection.books.findIndex((b) => b.id === active.id);
+    const newIndex = collection.books.findIndex((b) => b.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    const next = arrayMove(collection.books, oldIndex, newIndex);
+    setCollection({ ...collection, books: next });
+    const res = await fetch(`/api/collections/${id}/books`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order: next.map((b) => b.id) }),
+    }).catch(() => null);
+    if (!res?.ok) {
+      alert("Reorder failed");
+      fetchCollection();
+    }
   };
 
   const handleEnterBookSelect = () => {
@@ -331,12 +365,25 @@ export default function CollectionPage({
           </p>
         </Card>
       ) : (
+        <DndContext
+          sensors={dndSensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+        <SortableContext
+          items={collection.books.map((b) => b.id)}
+          strategy={verticalListSortingStrategy}
+        >
         <ol className="space-y-3">
           {collection.books.map((book, i) => {
             const isSel = bookSelect.selected.has(book.id);
             return (
-            <li
+            <SortableGridItem
+              as="li"
               key={book.id}
+              id={book.id}
+              type="book"
+              disabled={bookSelect.mode || readOnly}
               className={`flex items-center gap-4 p-3 rounded-xl border transition-all ${
                 bookSelect.mode
                   ? `cursor-pointer ${isSel ? "border-primary ring-2 ring-primary ring-offset-2 bg-accent/30" : "border-border/50 hover:border-primary/30 hover:bg-accent/20"}`
@@ -461,10 +508,12 @@ export default function CollectionPage({
                   )}
                 </div>
               )}
-            </li>
+            </SortableGridItem>
             );
           })}
         </ol>
+        </SortableContext>
+        </DndContext>
       )}
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>

@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { UserButton } from "@clerk/nextjs";
 import { Menu } from "lucide-react";
+import { closestCenter, DndContext, type DragEndEvent } from "@dnd-kit/core";
+import { arrayMove, rectSortingStrategy, SortableContext } from "@dnd-kit/sortable";
+import { SortableGridItem, useLibraryDndSensors } from "@/components/library/dnd";
 import { UploadZone } from "@/components/UploadZone";
 import { BookCard } from "@/components/BookCard";
 import { CollectionCard } from "@/components/CollectionCard";
@@ -69,6 +72,7 @@ export default function HomePage() {
   const bookSelect = useSelection();
   const collectionSelect = useSelection();
   const confirm = useConfirm();
+  const dndSensors = useLibraryDndSensors();
 
   const fetchBooks = useCallback(async () => {
     const res = await fetch("/api/books?scope=top");
@@ -103,10 +107,9 @@ export default function HomePage() {
   const handleDelete = async (id: string) => {
     const res = await fetch(`/api/books/${id}`, { method: "DELETE" });
     if (res.ok) {
-      fetchBooks();
-      // Deleting a book cascades to membership rows; refresh the
-      // collection covers + counts so the shelf reflects reality.
-      fetchCollections();
+      // Top-level books aren't collection members, so only the book list
+      // changes — no need to reload both endpoints from Turso.
+      setBooks((prev) => prev.filter((b) => b.id !== id));
     }
   };
 
@@ -117,8 +120,16 @@ export default function HomePage() {
       body: JSON.stringify({ collectionId }),
     });
     if (res.ok) {
-      fetchBooks();
-      fetchCollections();
+      if (collectionId) {
+        setBooks((prev) => prev.filter((b) => b.id !== bookId));
+        setCollections((prev) =>
+          prev.map((c) =>
+            c.id === collectionId ? { ...c, bookCount: c.bookCount + 1 } : c,
+          ),
+        );
+        // Cover can change when the collection was empty; refresh quietly.
+        fetchCollections();
+      }
     } else {
       alert(`Move failed: ${await res.text()}`);
     }
@@ -251,14 +262,16 @@ export default function HomePage() {
       return;
     }
     const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
+    const failedIds = new Set(data.failed.map((f) => f.id));
     if (data.failed.length > 0) {
       alert(`${data.succeeded} of ${ids.length} deleted. ${data.failed.length} failed.`);
-      bookSelect.remove(ids.filter((id) => !data.failed.some((f) => f.id === id)));
+      bookSelect.remove(ids.filter((id) => !failedIds.has(id)));
     } else {
       bookSelect.exit();
     }
-    fetchBooks();
-    fetchCollections();
+    // Deleted top-level books only shrink the book grid; drop them locally
+    // instead of reloading both lists from Turso.
+    setBooks((prev) => prev.filter((b) => !ids.includes(b.id) || failedIds.has(b.id)));
   };
 
   const handleBulkMoveBooks = async (collectionId: string | null) => {
@@ -274,14 +287,100 @@ export default function HomePage() {
       return;
     }
     const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
+    const failedIds = new Set(data.failed.map((f) => f.id));
     if (data.failed.length > 0) {
       alert(`${data.succeeded} of ${ids.length} moved. ${data.failed.length} failed.`);
-      bookSelect.remove(ids.filter((id) => !data.failed.some((f) => f.id === id)));
+      bookSelect.remove(ids.filter((id) => !failedIds.has(id)));
     } else {
       bookSelect.exit();
     }
-    fetchBooks();
-    fetchCollections();
+    // Books moved into a collection leave the top-level grid; "move" to
+    // top level is a no-op here since these books are already top-level.
+    if (collectionId) {
+      setBooks((prev) => prev.filter((b) => !ids.includes(b.id) || failedIds.has(b.id)));
+      if (data.succeeded > 0) {
+        setCollections((prev) =>
+          prev.map((c) =>
+            c.id === collectionId
+              ? { ...c, bookCount: c.bookCount + data.succeeded }
+              : c,
+          ),
+        );
+        fetchCollections();
+      }
+    }
+  };
+
+  // Drag-and-drop: reorder collections, reorder top-level books, or drop
+  // a book onto a collection card to move it in. All three update local
+  // state optimistically and persist in the background; failures revert
+  // via a refetch.
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const activeType = active.data.current?.type;
+    const overType = over.data.current?.type;
+
+    if (activeType === "collection" && overType === "collection") {
+      const oldIndex = collections.findIndex((c) => c.id === active.id);
+      const newIndex = collections.findIndex((c) => c.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) return;
+      const next = arrayMove(collections, oldIndex, newIndex);
+      setCollections(next);
+      const res = await fetch("/api/collections/order", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order: next.map((c) => c.id) }),
+      }).catch(() => null);
+      if (!res?.ok) {
+        alert("Reorder failed");
+        fetchCollections();
+      }
+      return;
+    }
+
+    if (activeType === "book" && overType === "collection") {
+      const book = books.find((b) => b.id === active.id);
+      if (!book) return;
+      const targetId = String(over.id);
+      setBooks((prev) => prev.filter((b) => b.id !== active.id));
+      setCollections((prev) =>
+        prev.map((c) =>
+          c.id === targetId ? { ...c, bookCount: c.bookCount + 1 } : c,
+        ),
+      );
+      const res = await fetch(`/api/books/${active.id}/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ collectionId: targetId }),
+      }).catch(() => null);
+      if (!res?.ok) {
+        alert("Move failed");
+        fetchBooks();
+        fetchCollections();
+      } else {
+        // The collection cover can change server-side; refresh quietly.
+        fetchCollections();
+      }
+      return;
+    }
+
+    if (activeType === "book" && overType === "book") {
+      const oldIndex = books.findIndex((b) => b.id === active.id);
+      const newIndex = books.findIndex((b) => b.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) return;
+      const next = arrayMove(books, oldIndex, newIndex);
+      setBooks(next);
+      const res = await fetch("/api/books/order", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order: next.map((b) => b.id) }),
+      }).catch(() => null);
+      if (!res?.ok) {
+        alert("Reorder failed");
+        fetchBooks();
+      }
+    }
   };
 
   const handleBulkDeleteCollections = async () => {
@@ -483,6 +582,11 @@ export default function HomePage() {
         />
       </section>
 
+      <DndContext
+        sensors={dndSensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
       <section className="mb-10">
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
@@ -515,24 +619,37 @@ export default function HomePage() {
             Group books into a series — the first book&apos;s cover becomes the shelf.
           </p>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-5">
-            {collections.map((c, i) => (
-              <div
-                key={c.id}
-                className="stagger-fade-in"
-                style={{ animationDelay: `${200 + i * 60}ms` }}
-              >
-                <CollectionCard
-                  collection={c}
-                  currentUserId={currentUser?.id}
-                  isAdmin={isAdmin}
-                  selectMode={collectionSelect.mode}
-                  selected={collectionSelect.selected.has(c.id)}
-                  onSelectToggle={collectionSelect.toggle}
-                />
-              </div>
-            ))}
-          </div>
+          <SortableContext
+            items={collections.map((c) => c.id)}
+            strategy={rectSortingStrategy}
+          >
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-5">
+              {collections.map((c, i) => (
+                <SortableGridItem
+                  key={c.id}
+                  id={c.id}
+                  type="collection"
+                  disabled={
+                    collectionSelect.mode ||
+                    bookSelect.mode ||
+                    !currentUser ||
+                    c.userId !== currentUser.id
+                  }
+                  className="stagger-fade-in"
+                  style={{ animationDelay: `${200 + i * 60}ms` }}
+                >
+                  <CollectionCard
+                    collection={c}
+                    currentUserId={currentUser?.id}
+                    isAdmin={isAdmin}
+                    selectMode={collectionSelect.mode}
+                    selected={collectionSelect.selected.has(c.id)}
+                    onSelectToggle={collectionSelect.toggle}
+                  />
+                </SortableGridItem>
+              ))}
+            </div>
+          </SortableContext>
         )}
       </section>
 
@@ -553,27 +670,40 @@ export default function HomePage() {
               </Button>
             )}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {books.map((book, i) => (
-              <div
-                key={book.id}
-                className="stagger-fade-in"
-                style={{ animationDelay: `${250 + i * 60}ms` }}
-              >
-                <BookCard
-                  book={book}
-                  onDelete={handleDelete}
-                  onChange={fetchBooks}
-                  currentUserId={currentUser?.id}
-                  collections={collections}
-                  onMove={handleMove}
-                  selectMode={bookSelect.mode}
-                  selected={bookSelect.selected.has(book.id)}
-                  onSelectToggle={bookSelect.toggle}
-                />
-              </div>
-            ))}
-          </div>
+          <SortableContext
+            items={books.map((b) => b.id)}
+            strategy={rectSortingStrategy}
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {books.map((book, i) => (
+                <SortableGridItem
+                  key={book.id}
+                  id={book.id}
+                  type="book"
+                  disabled={
+                    bookSelect.mode ||
+                    collectionSelect.mode ||
+                    !currentUser ||
+                    book.userId !== currentUser.id
+                  }
+                  className="stagger-fade-in"
+                  style={{ animationDelay: `${250 + i * 60}ms` }}
+                >
+                  <BookCard
+                    book={book}
+                    onDelete={handleDelete}
+                    onChange={fetchBooks}
+                    currentUserId={currentUser?.id}
+                    collections={collections}
+                    onMove={handleMove}
+                    selectMode={bookSelect.mode}
+                    selected={bookSelect.selected.has(book.id)}
+                    onSelectToggle={bookSelect.toggle}
+                  />
+                </SortableGridItem>
+              ))}
+            </div>
+          </SortableContext>
         </section>
       ) : (
         <div className="text-center py-16 animate-in fade-in duration-700 delay-200">
@@ -588,6 +718,7 @@ export default function HomePage() {
           </p>
         </div>
       )}
+      </DndContext>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>

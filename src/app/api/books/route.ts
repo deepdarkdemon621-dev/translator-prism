@@ -62,8 +62,14 @@ export async function GET(request: NextRequest) {
         : isNull(books.collectionId)
       : whereClause;
 
+  // Manually ordered books (library_seq set) first in their chosen order;
+  // never-ordered ones keep the old newest-first ordering after them.
   const allBooks = await (finalWhere ? query.where(finalWhere) : query)
-    .orderBy(desc(books.createdAt))
+    .orderBy(
+      sql`CASE WHEN ${books.librarySeq} IS NULL THEN 1 ELSE 0 END`,
+      books.librarySeq,
+      desc(books.createdAt),
+    )
     .all();
 
   // Count "done" chapters + pending/processing translations per book. The

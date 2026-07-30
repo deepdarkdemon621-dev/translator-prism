@@ -77,6 +77,8 @@ describe("collection query helpers", () => {
     id: string;
     userId: string;
     visibility?: "public" | "private";
+    seq?: number | null;
+    updatedAt?: string;
   }) {
     await db
       .insert(schema.collections)
@@ -85,6 +87,8 @@ describe("collection query helpers", () => {
         userId: params.userId,
         name: params.id,
         visibility: params.visibility ?? "private",
+        seq: params.seq ?? null,
+        ...(params.updatedAt ? { updatedAt: params.updatedAt } : {}),
       })
       .run();
   }
@@ -255,5 +259,35 @@ describe("collection query helpers", () => {
       { id: "book-b", translatedChapters: 1, pendingTranslations: 0 },
     ]);
     expect(selectStatements()).toHaveLength(3);
+  });
+
+  it("orders manually sequenced collections first, then recently updated", async () => {
+    const owner = await makeUser();
+    await makeCollection({
+      id: "unordered-new",
+      userId: owner,
+      seq: null,
+      updatedAt: "2026-07-30T00:00:00.000Z",
+    });
+    await makeCollection({
+      id: "unordered-old",
+      userId: owner,
+      seq: null,
+      updatedAt: "2026-07-01T00:00:00.000Z",
+    });
+    await makeCollection({ id: "second", userId: owner, seq: 1 });
+    await makeCollection({ id: "first", userId: owner, seq: 0 });
+
+    const rows = await listVisibleCollectionsWithSummaries(db, {
+      id: owner,
+      isAdmin: false,
+    });
+
+    expect(rows.map((r) => r.id)).toEqual([
+      "first",
+      "second",
+      "unordered-new",
+      "unordered-old",
+    ]);
   });
 });

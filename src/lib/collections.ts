@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
 import { books, collections } from "@/lib/db/schema";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 /** Minimal shape of the acting user — pass from callers that already
  * resolved getCurrentUser(). Keeps this module free of auth imports. */
@@ -137,6 +137,101 @@ export async function moveBookToCollection(params: {
       .where(eq(collections.id, targetCollectionId))
       .run();
   }
+}
+
+// Keep CASE arms and IN params well inside SQLite's 999-variable limit.
+const BULK_CHUNK = 200;
+
+/**
+ * Bulk variant of moveBookToCollection: same permission rules and
+ * append-to-tail seq semantics, but a fixed number of queries regardless
+ * of how many books move (the per-book loop was 5 Turso round-trips per
+ * book). Books keep their relative payload order when appended.
+ */
+export async function moveBooksToCollectionBulk(params: {
+  bookIds: string[];
+  targetCollectionId: string | null;
+  actingUserId: string;
+}): Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }> {
+  const { bookIds, targetCollectionId, actingUserId } = params;
+  const db = getDb();
+  const succeeded: string[] = [];
+  const failed: Array<{ id: string; error: string }> = [];
+
+  const ownerById = new Map<string, string | null>();
+  for (let i = 0; i < bookIds.length; i += BULK_CHUNK) {
+    const chunk = bookIds.slice(i, i + BULK_CHUNK);
+    const rows = await db
+      .select({ id: books.id, userId: books.userId })
+      .from(books)
+      .where(inArray(books.id, chunk))
+      .all();
+    for (const row of rows) ownerById.set(row.id, row.userId);
+  }
+
+  const eligible: string[] = [];
+  for (const id of bookIds) {
+    if (!ownerById.has(id)) failed.push({ id, error: "book not found" });
+    else if (ownerById.get(id) !== actingUserId)
+      failed.push({ id, error: "book not owned by caller" });
+    else eligible.push(id);
+  }
+  if (eligible.length === 0) return { succeeded, failed };
+
+  const now = new Date().toISOString();
+  if (targetCollectionId === null) {
+    for (let i = 0; i < eligible.length; i += BULK_CHUNK) {
+      await db
+        .update(books)
+        .set({ collectionId: null, collectionSeq: null, updatedAt: now })
+        .where(inArray(books.id, eligible.slice(i, i + BULK_CHUNK)));
+    }
+    succeeded.push(...eligible);
+    return { succeeded, failed };
+  }
+
+  const target = await db
+    .select({ userId: collections.userId })
+    .from(collections)
+    .where(eq(collections.id, targetCollectionId))
+    .get();
+  if (!target) {
+    for (const id of eligible) failed.push({ id, error: "collection not found" });
+    return { succeeded, failed };
+  }
+  if (target.userId !== actingUserId) {
+    for (const id of eligible)
+      failed.push({ id, error: "collection not owned by caller" });
+    return { succeeded, failed };
+  }
+
+  const maxRow = await db
+    .select({ s: sql<number | null>`MAX(${books.collectionSeq})` })
+    .from(books)
+    .where(eq(books.collectionId, targetCollectionId))
+    .get();
+  const baseSeq = (maxRow?.s ?? -1) + 1;
+
+  const assignments = eligible.map((id, i) => ({ id, seq: baseSeq + i }));
+  for (let i = 0; i < assignments.length; i += BULK_CHUNK) {
+    const chunk = assignments.slice(i, i + BULK_CHUNK);
+    await db.run(sql`
+      UPDATE books SET
+        collection_id = ${targetCollectionId},
+        collection_seq = CASE id ${sql.join(
+          chunk.map((a) => sql`WHEN ${a.id} THEN ${a.seq}`),
+          sql` `,
+        )} END,
+        updated_at = ${now}
+      WHERE id IN (${sql.join(chunk.map((a) => sql`${a.id}`), sql`, `)})`);
+  }
+  await db
+    .update(collections)
+    .set({ updatedAt: now })
+    .where(eq(collections.id, targetCollectionId))
+    .run();
+  succeeded.push(...eligible);
+  return { succeeded, failed };
 }
 
 /** Top-level books clause for the main library view. Kept here so the
