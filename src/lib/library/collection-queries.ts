@@ -34,6 +34,7 @@ export interface CollectionBookWithProgress {
   seq: number | null;
   translatedChapters: number;
   pendingTranslations: number;
+  failedTranslations: number;
 }
 
 export async function listVisibleCollectionsWithSummaries(
@@ -153,6 +154,7 @@ export async function loadCollectionBooksWithProgress(
   const bookIds = rows.map((book) => book.id);
   const doneByBook = new Map<string, number>();
   const pendingByBook = new Map<string, number>();
+  const failedByBook = new Map<string, number>();
 
   if (bookIds.length) {
     const doneRows = await db
@@ -177,10 +179,13 @@ export async function loadCollectionBooksWithProgress(
       doneByBook.set(row.bookId, Number(row.count ?? 0));
     }
 
-    const pendingRows = await db
+    // One aggregation covers both the Cancel button (pending/processing)
+    // and the "why is this book stuck" badge (failed).
+    const statusRows = await db
       .select({
         bookId: chapters.bookId,
-        count: sql<number>`COUNT(*)`,
+        pendingCount: sql<number>`SUM(CASE WHEN ${translations.status} IN ('pending', 'processing') THEN 1 ELSE 0 END)`,
+        failedCount: sql<number>`SUM(CASE WHEN ${translations.status} = 'failed' THEN 1 ELSE 0 END)`,
       })
       .from(translations)
       .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))
@@ -188,13 +193,14 @@ export async function loadCollectionBooksWithProgress(
       .where(
         and(
           inArray(chapters.bookId, bookIds),
-          inArray(translations.status, ["pending", "processing"]),
+          inArray(translations.status, ["pending", "processing", "failed"]),
         ),
       )
       .groupBy(chapters.bookId)
       .all();
-    for (const row of pendingRows) {
-      pendingByBook.set(row.bookId, Number(row.count));
+    for (const row of statusRows) {
+      pendingByBook.set(row.bookId, Number(row.pendingCount));
+      failedByBook.set(row.bookId, Number(row.failedCount));
     }
   }
 
@@ -202,5 +208,6 @@ export async function loadCollectionBooksWithProgress(
     ...book,
     translatedChapters: doneByBook.get(book.id) ?? 0,
     pendingTranslations: pendingByBook.get(book.id) ?? 0,
+    failedTranslations: failedByBook.get(book.id) ?? 0,
   }));
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { TopBar } from "./TopBar";
 import { BottomBar } from "./BottomBar";
 import { ChapterSidebar } from "./ChapterSidebar";
@@ -134,7 +134,18 @@ export function ReaderLayout({
     return () => cancelAnimationFrame(frame);
   }, [pendingScrollId, visibleLangs]);
 
+  // Next-chapter prefetch cache. Only fully translated chapters are cached
+  // — their payload is stable, so serving it on a chapter flip is safe and
+  // instant. In-progress chapters always fetch fresh (they poll anyway).
+  const prefetchCache = useRef(new Map<string, ChapterContent>());
+
   const fetchContent = useCallback(async (chapterId: string) => {
+    const cached = prefetchCache.current.get(chapterId);
+    if (cached) {
+      prefetchCache.current.delete(chapterId);
+      setContent(cached);
+      return;
+    }
     try {
       const res = await fetch(`/api/chapters/${chapterId}`);
       if (res.ok) {
@@ -146,6 +157,34 @@ export function ReaderLayout({
       console.error(`Error fetching chapter ${chapterId}:`, err);
     }
   }, []);
+
+  // Warm the cache with the next chapter while the current one is read.
+  useEffect(() => {
+    const nextCh = chapters.find((c) => c.index === currentIndex + 1);
+    if (!nextCh || nextCh.status !== "done") return;
+    if (prefetchCache.current.has(nextCh.id)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/chapters/${nextCh.id}`);
+        if (!res.ok || cancelled) return;
+        const payload: ChapterContent = await res.json();
+        if (payload.status !== "done" || cancelled) return;
+        prefetchCache.current.set(nextCh.id, payload);
+        // Keep at most a few chapters in memory.
+        while (prefetchCache.current.size > 3) {
+          const oldest = prefetchCache.current.keys().next().value;
+          if (oldest == null) break;
+          prefetchCache.current.delete(oldest);
+        }
+      } catch {
+        // Prefetch is best-effort; the normal fetch path still works.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentIndex, chapters]);
 
   const triggerTranslation = useCallback(async (chapterId: string) => {
     await fetch(`/api/chapters/${chapterId}/translate`, { method: "POST" });

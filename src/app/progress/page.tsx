@@ -108,6 +108,32 @@ export default function ProgressPage() {
     fetchProgress();
   }, [fetchProgress]);
 
+  // Per-book variant: requeue only one stuck book's failed rows instead
+  // of every visible book at once.
+  const [retryingBookId, setRetryingBookId] = useState<string | null>(null);
+  const handleRetryBook = useCallback(
+    async (bookId: string) => {
+      setRetryingBookId(bookId);
+      try {
+        const res = await fetch(`/api/books/${bookId}/retry-failed`, {
+          method: "POST",
+        });
+        if (!res.ok) {
+          setRetryMessage(`Retry failed (${res.status})`);
+          return;
+        }
+        const json: { reset: number } = await res.json();
+        setRetryMessage(`Reset ${json.reset} failed translations to pending.`);
+        fetchProgress();
+      } catch (err) {
+        setRetryMessage(err instanceof Error ? err.message : "Network error");
+      } finally {
+        setRetryingBookId(null);
+      }
+    },
+    [fetchProgress],
+  );
+
   const handleRetryFailed = useCallback(async () => {
     setRetrying(true);
     setRetryMessage(null);
@@ -335,7 +361,12 @@ export default function ProgressPage() {
             ) : (
               <>
                 {pagedBooks.items.map((b) => (
-                  <BookRow key={b.id} book={b} />
+                  <BookRow
+                    key={b.id}
+                    book={b}
+                    onRetry={handleRetryBook}
+                    retrying={retryingBookId === b.id}
+                  />
                 ))}
                 {pagedBooks.totalPages > 1 && (
                   <div className="flex items-center justify-between pt-2">
@@ -540,7 +571,15 @@ function ProgressBar({ value }: { value: number }) {
   );
 }
 
-function BookRow({ book }: { book: BookProgress }) {
+function BookRow({
+  book,
+  onRetry,
+  retrying,
+}: {
+  book: BookProgress;
+  onRetry?: (bookId: string) => void;
+  retrying?: boolean;
+}) {
   const p = pct(book.done, book.total);
   const active = book.pending + book.processing;
   return (
@@ -578,9 +617,23 @@ function BookRow({ book }: { book: BookProgress }) {
           </span>
         </div>
         <ProgressBar value={p} />
-        <div className="text-[11px] text-muted-foreground mt-1.5 tabular-nums">
-          {book.doneChapters} / {book.totalChapters} chapters
-          {active > 0 && <span className="ml-2">· {active} in flight</span>}
+        <div className="flex items-center justify-between mt-1.5">
+          <div className="text-[11px] text-muted-foreground tabular-nums">
+            {book.doneChapters} / {book.totalChapters} chapters
+            {active > 0 && <span className="ml-2">· {active} in flight</span>}
+          </div>
+          {book.failed > 0 && onRetry && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 text-[11px] px-2"
+              onClick={() => onRetry(book.id)}
+              disabled={retrying}
+              title="Requeue only this book's failed translations"
+            >
+              {retrying ? "Requeuing…" : `Retry ${book.failed}`}
+            </Button>
+          )}
         </div>
       </div>
     </div>

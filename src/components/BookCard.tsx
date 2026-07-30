@@ -18,6 +18,7 @@ import {
 import Link from "next/link";
 import { translateAllWithGate } from "@/lib/translate/client";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 
 interface BookCardProps {
   book: {
@@ -34,6 +35,9 @@ interface BookCardProps {
     /** Count of translations still pending or processing for this book.
      * Drives the Cancel button: shown only when > 0. */
     pendingTranslations?: number;
+    /** Count of failed translations — explains why a book sits below 100%
+     * with nothing in flight, and enables the per-book retry action. */
+    failedTranslations?: number;
     userId?: string | null;
     collectionId?: string | null;
   };
@@ -79,9 +83,12 @@ export function BookCard({
       : 0;
   const [translating, setTranslating] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const confirm = useConfirm();
+  const toast = useToast();
   const fullyTranslated = book.translatedChapters >= book.totalChapters && book.totalChapters > 0;
   const hasPending = (book.pendingTranslations ?? 0) > 0;
+  const failedCount = book.failedTranslations ?? 0;
 
   const handleTranslateAll = async () => {
     setTranslating(true);
@@ -89,14 +96,14 @@ export function BookCard({
       const res = await translateAllWithGate(`/api/books/${book.id}/translate-all`);
       if (res.cancelled) return;
       if (res.error) {
-        alert(`Translate failed: ${res.error}`);
+        toast(`Translate failed: ${res.error}`, { variant: "error" });
         return;
       }
       if (res.queued > 0) {
-        alert(`Queued ${res.queued} translations${res.chaptersQueued ? ` across ${res.chaptersQueued} chapters` : ""}.`);
+        toast(`Queued ${res.queued} translations${res.chaptersQueued ? ` across ${res.chaptersQueued} chapters` : ""}.`, { variant: "success" });
         onChange?.();
       } else {
-        alert("Nothing to translate — everything looks done.");
+        toast("Nothing to translate — everything looks done.");
       }
     } finally {
       setTranslating(false);
@@ -115,14 +122,30 @@ export function BookCard({
     try {
       const res = await fetch(`/api/books/${book.id}/translate-cancel`, { method: "POST" });
       if (!res.ok) {
-        alert(`Cancel failed: ${await res.text()}`);
+        toast(`Cancel failed: ${await res.text()}`, { variant: "error" });
         return;
       }
       const data = await res.json();
-      alert(`Cancelled ${data.cancelled} translation(s).`);
+      toast(`Cancelled ${data.cancelled} translation(s).`);
       onChange?.();
     } finally {
       setCancelling(false);
+    }
+  };
+
+  const handleRetryFailed = async () => {
+    setRetrying(true);
+    try {
+      const res = await fetch(`/api/books/${book.id}/retry-failed`, { method: "POST" });
+      if (!res.ok) {
+        toast(`Retry failed: ${await res.text()}`, { variant: "error" });
+        return;
+      }
+      const data = await res.json();
+      toast(`Requeued ${data.reset} failed translation(s).`, { variant: "success" });
+      onChange?.();
+    } finally {
+      setRetrying(false);
     }
   };
 
@@ -220,6 +243,11 @@ export function BookCard({
                 {book.translatedChapters}/{book.totalChapters}
               </span>
             </div>
+            {failedCount > 0 && !fullyTranslated && (
+              <p className="text-[10px] text-destructive mb-1" title="Failed translations block these chapters from finishing. Use Retry in the ⋯ menu.">
+                {failedCount} failed translation{failedCount === 1 ? "" : "s"}
+              </p>
+            )}
           </div>
 
           <div className="flex gap-1.5">
@@ -273,6 +301,11 @@ export function BookCard({
                 }
               />
               <DropdownMenuContent align="end" className="w-44">
+                {failedCount > 0 && (
+                  <DropdownMenuItem onClick={handleRetryFailed} disabled={retrying}>
+                    {retrying ? "Requeuing…" : `Retry ${failedCount} failed`}
+                  </DropdownMenuItem>
+                )}
                 {onMove && (
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger>Move to…</DropdownMenuSubTrigger>

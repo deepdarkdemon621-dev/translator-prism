@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Noto_Serif_JP, Noto_Serif_SC, Fraunces } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
+import { ToastProvider } from "@/components/ui/toast";
 import { GlobalQuotaBanner } from "@/components/GlobalQuotaBanner";
 import "./globals.css";
 
@@ -62,10 +63,12 @@ export default function RootLayout({
         <body
           className={`${notoJp.variable} ${notoSc.variable} ${fraunces.variable} antialiased bg-background text-foreground`}
         >
-          <ConfirmProvider>
-            <GlobalQuotaBanner />
-            {children}
-          </ConfirmProvider>
+          <ToastProvider>
+            <ConfirmProvider>
+              <GlobalQuotaBanner />
+              {children}
+            </ConfirmProvider>
+          </ToastProvider>
         </body>
       </html>
     </ClerkProvider>

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useToast } from "@/components/ui/toast";
 import { useSelection } from "@/components/library/useSelection";
 import { SelectionBar } from "@/components/library/SelectionBar";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -72,6 +73,7 @@ export default function HomePage() {
   const bookSelect = useSelection();
   const collectionSelect = useSelection();
   const confirm = useConfirm();
+  const toast = useToast();
   const dndSensors = useLibraryDndSensors();
 
   const fetchBooks = useCallback(async () => {
@@ -131,7 +133,7 @@ export default function HomePage() {
         fetchCollections();
       }
     } else {
-      alert(`Move failed: ${await res.text()}`);
+      toast(`Move failed: ${await res.text()}`, { variant: "error" });
     }
   };
 
@@ -144,14 +146,14 @@ export default function HomePage() {
       const res = await translateAllWithGate("/api/books/translate-all");
       if (res.cancelled) return;
       if (res.error) {
-        alert(`Translate failed: ${res.error}`);
+        toast(`Translate failed: ${res.error}`, { variant: "error" });
         return;
       }
       if (res.queued > 0) {
-        alert(`Queued ${res.queued} translations across ${res.chaptersQueued ?? 0} chapters.`);
+        toast(`Queued ${res.queued} translations across ${res.chaptersQueued ?? 0} chapters.`, { variant: "success" });
         fetchBooks();
       } else {
-        alert("Nothing to queue — every chapter already done or in flight.");
+        toast("Nothing to queue — every chapter already done or in flight.");
       }
     } finally {
       setSweeping(false);
@@ -165,7 +167,7 @@ export default function HomePage() {
   const handleCancelAll = async () => {
     const anyPending = books.some((b) => (b.pendingTranslations ?? 0) > 0);
     if (!anyPending) {
-      alert("Nothing to cancel — no pending translations.");
+      toast("Nothing to cancel — no pending translations.");
       return;
     }
     if (!(await confirm({
@@ -179,11 +181,11 @@ export default function HomePage() {
     try {
       const res = await fetch("/api/books/translate-cancel-all", { method: "POST" });
       if (!res.ok) {
-        alert(`Cancel failed: ${await res.text()}`);
+        toast(`Cancel failed: ${await res.text()}`, { variant: "error" });
         return;
       }
       const data = await res.json();
-      alert(`Cancelled ${data.cancelled} translation(s) across ${data.booksTouched} book(s).`);
+      toast(`Cancelled ${data.cancelled} translation(s) across ${data.booksTouched} book(s).`);
       fetchBooks();
     } finally {
       setCancellingAll(false);
@@ -203,11 +205,11 @@ export default function HomePage() {
       });
       if (!res.ok) {
         const text = await res.text();
-        alert(`Import failed: ${text}`);
+        toast(`Import failed: ${text}`, { variant: "error" });
         return;
       }
       const data = await res.json();
-      alert(`Imported "${data.title}" — ${data.chapters} chapters, ${data.translations} translations.`);
+      toast(`Imported "${data.title}" — ${data.chapters} chapters, ${data.translations} translations.`, { variant: "success" });
       fetchBooks();
     } finally {
       setImporting(false);
@@ -258,13 +260,13 @@ export default function HomePage() {
       body: JSON.stringify({ action: "delete", ids }),
     });
     if (!res.ok) {
-      alert(`Delete failed: ${await res.text()}`);
+      toast(`Delete failed: ${await res.text()}`, { variant: "error" });
       return;
     }
     const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
     const failedIds = new Set(data.failed.map((f) => f.id));
     if (data.failed.length > 0) {
-      alert(`${data.succeeded} of ${ids.length} deleted. ${data.failed.length} failed.`);
+      toast(`${data.succeeded} of ${ids.length} deleted. ${data.failed.length} failed.`, { variant: "error" });
       bookSelect.remove(ids.filter((id) => !failedIds.has(id)));
     } else {
       bookSelect.exit();
@@ -283,13 +285,13 @@ export default function HomePage() {
       body: JSON.stringify({ action: "move", ids, collectionId }),
     });
     if (!res.ok) {
-      alert(`Move failed: ${await res.text()}`);
+      toast(`Move failed: ${await res.text()}`, { variant: "error" });
       return;
     }
     const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
     const failedIds = new Set(data.failed.map((f) => f.id));
     if (data.failed.length > 0) {
-      alert(`${data.succeeded} of ${ids.length} moved. ${data.failed.length} failed.`);
+      toast(`${data.succeeded} of ${ids.length} moved. ${data.failed.length} failed.`, { variant: "error" });
       bookSelect.remove(ids.filter((id) => !failedIds.has(id)));
     } else {
       bookSelect.exit();
@@ -333,7 +335,7 @@ export default function HomePage() {
         body: JSON.stringify({ order: next.map((c) => c.id) }),
       }).catch(() => null);
       if (!res?.ok) {
-        alert("Reorder failed");
+        toast("Reorder failed", { variant: "error" });
         fetchCollections();
       }
       return;
@@ -355,7 +357,7 @@ export default function HomePage() {
         body: JSON.stringify({ collectionId: targetId }),
       }).catch(() => null);
       if (!res?.ok) {
-        alert("Move failed");
+        toast("Move failed", { variant: "error" });
         fetchBooks();
         fetchCollections();
       } else {
@@ -377,7 +379,7 @@ export default function HomePage() {
         body: JSON.stringify({ order: next.map((b) => b.id) }),
       }).catch(() => null);
       if (!res?.ok) {
-        alert("Reorder failed");
+        toast("Reorder failed", { variant: "error" });
         fetchBooks();
       }
     }
@@ -405,12 +407,12 @@ export default function HomePage() {
       body: JSON.stringify({ action: "delete", ids }),
     });
     if (!res.ok) {
-      alert(`Delete failed: ${await res.text()}`);
+      toast(`Delete failed: ${await res.text()}`, { variant: "error" });
       return;
     }
     const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
     if (data.failed.length > 0) {
-      alert(`${data.succeeded} of ${ids.length} deleted. ${data.failed.length} failed.`);
+      toast(`${data.succeeded} of ${ids.length} deleted. ${data.failed.length} failed.`, { variant: "error" });
       collectionSelect.remove(ids.filter((id) => !data.failed.some((f) => f.id === id)));
     } else {
       collectionSelect.exit();

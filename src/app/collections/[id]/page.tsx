@@ -20,6 +20,7 @@ import { translateAllWithGate } from "@/lib/translate/client";
 import { useSelection } from "@/components/library/useSelection";
 import { SelectionBar } from "@/components/library/SelectionBar";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,6 +37,7 @@ interface CollectionBook {
   totalChapters: number;
   translatedChapters: number;
   pendingTranslations: number;
+  failedTranslations?: number;
   status: string;
   seq: number | null;
 }
@@ -73,6 +75,7 @@ export default function CollectionPage({
   const [allCollectionsLoaded, setAllCollectionsLoaded] = useState(false);
   const bookSelect = useSelection();
   const confirm = useConfirm();
+  const toast = useToast();
   const dndSensors = useLibraryDndSensors();
 
   const fetchAllCollections = useCallback(async () => {
@@ -109,15 +112,31 @@ export default function CollectionPage({
       const res = await translateAllWithGate(`/api/books/${bookId}/translate-all`);
       if (res.cancelled) return;
       if (res.error) {
-        alert(`Translate failed: ${res.error}`);
+        toast(`Translate failed: ${res.error}`, { variant: "error" });
         return;
       }
       if (res.queued > 0) {
-        alert(`Queued ${res.queued} translations${res.chaptersQueued ? ` across ${res.chaptersQueued} chapters` : ""}.`);
+        toast(`Queued ${res.queued} translations${res.chaptersQueued ? ` across ${res.chaptersQueued} chapters` : ""}.`, { variant: "success" });
         fetchCollection();
       } else {
-        alert("Nothing to translate — everything looks done.");
+        toast("Nothing to translate — everything looks done.");
       }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleRetryFailed = async (book: CollectionBook) => {
+    setBusyId(book.id);
+    try {
+      const res = await fetch(`/api/books/${book.id}/retry-failed`, { method: "POST" });
+      if (!res.ok) {
+        toast(`Retry failed: ${await res.text()}`, { variant: "error" });
+        return;
+      }
+      const data = await res.json();
+      toast(`Requeued ${data.reset} failed translation(s).`, { variant: "success" });
+      fetchCollection();
     } finally {
       setBusyId(null);
     }
@@ -135,11 +154,11 @@ export default function CollectionPage({
     try {
       const res = await fetch(`/api/books/${book.id}/translate-cancel`, { method: "POST" });
       if (!res.ok) {
-        alert(`Cancel failed: ${await res.text()}`);
+        toast(`Cancel failed: ${await res.text()}`, { variant: "error" });
         return;
       }
       const data = await res.json();
-      alert(`Cancelled ${data.cancelled} translation(s).`);
+      toast(`Cancelled ${data.cancelled} translation(s).`);
       fetchCollection();
     } finally {
       setBusyId(null);
@@ -196,7 +215,7 @@ export default function CollectionPage({
       body: JSON.stringify({ order: next.map((b) => b.id) }),
     }).catch(() => null);
     if (!res?.ok) {
-      alert("Reorder failed");
+      toast("Reorder failed", { variant: "error" });
       fetchCollection();
     }
   };
@@ -240,12 +259,12 @@ export default function CollectionPage({
       body: JSON.stringify({ action: "move", ids, collectionId }),
     });
     if (!res.ok) {
-      alert(`Move failed: ${await res.text()}`);
+      toast(`Move failed: ${await res.text()}`, { variant: "error" });
       return;
     }
     const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
     if (data.failed.length > 0) {
-      alert(`${data.succeeded} of ${ids.length} moved. ${data.failed.length} failed.`);
+      toast(`${data.succeeded} of ${ids.length} moved. ${data.failed.length} failed.`, { variant: "error" });
       bookSelect.remove(ids.filter((id) => !data.failed.some((f) => f.id === id)));
     } else {
       bookSelect.exit();
@@ -268,12 +287,12 @@ export default function CollectionPage({
       body: JSON.stringify({ action: "delete", ids }),
     });
     if (!res.ok) {
-      alert(`Delete failed: ${await res.text()}`);
+      toast(`Delete failed: ${await res.text()}`, { variant: "error" });
       return;
     }
     const data: { succeeded: number; failed: Array<{ id: string; error: string }> } = await res.json();
     if (data.failed.length > 0) {
-      alert(`${data.succeeded} of ${ids.length} deleted. ${data.failed.length} failed.`);
+      toast(`${data.succeeded} of ${ids.length} deleted. ${data.failed.length} failed.`, { variant: "error" });
       bookSelect.remove(ids.filter((id) => !data.failed.some((f) => f.id === id)));
     } else {
       bookSelect.exit();
@@ -483,6 +502,17 @@ export default function CollectionPage({
                         className="h-7 text-xs px-2 text-destructive hover:bg-destructive/10 hover:border-destructive/40"
                       >
                         {busyId === book.id ? "…" : `Cancel (${book.pendingTranslations})`}
+                      </Button>
+                    ) : (book.failedTranslations ?? 0) > 0 ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleRetryFailed(book)}
+                        disabled={busyId === book.id}
+                        title="Failed translations block these chapters; requeue them"
+                        className="h-7 text-xs px-2 text-destructive hover:bg-destructive/10 hover:border-destructive/40"
+                      >
+                        {busyId === book.id ? "…" : `Retry ${book.failedTranslations} failed`}
                       </Button>
                     ) : (
                       <Button

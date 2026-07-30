@@ -85,6 +85,7 @@ export async function GET(request: NextRequest) {
   const bookIds = allBooks.map((b) => b.id);
   const doneByBook = new Map<string, number>();
   const pendingByBook = new Map<string, number>();
+  const failedByBook = new Map<string, number>();
   if (bookIds.length) {
     const doneRows = await db
       .select({
@@ -106,10 +107,13 @@ export async function GET(request: NextRequest) {
       .all();
     for (const r of doneRows) doneByBook.set(r.bookId, Number(r.count));
 
-    const pendingRows = await db
+    // One aggregation covers both the Cancel button (pending/processing)
+    // and the "why is this book stuck" badge (failed).
+    const statusRows = await db
       .select({
         bookId: chapters.bookId,
-        count: sql<number>`COUNT(*)`,
+        pendingCount: sql<number>`SUM(CASE WHEN ${translations.status} IN ('pending', 'processing') THEN 1 ELSE 0 END)`,
+        failedCount: sql<number>`SUM(CASE WHEN ${translations.status} = 'failed' THEN 1 ELSE 0 END)`,
       })
       .from(translations)
       .innerJoin(paragraphs, eq(translations.paragraphId, paragraphs.id))
@@ -117,18 +121,22 @@ export async function GET(request: NextRequest) {
       .where(
         and(
           inArray(chapters.bookId, bookIds),
-          inArray(translations.status, ["pending", "processing"]),
+          inArray(translations.status, ["pending", "processing", "failed"]),
         ),
       )
       .groupBy(chapters.bookId)
       .all();
-    for (const r of pendingRows) pendingByBook.set(r.bookId, Number(r.count));
+    for (const r of statusRows) {
+      pendingByBook.set(r.bookId, Number(r.pendingCount));
+      failedByBook.set(r.bookId, Number(r.failedCount));
+    }
   }
 
   const booksWithProgress = allBooks.map((book) => ({
     ...book,
     translatedChapters: doneByBook.get(book.id) ?? 0,
     pendingTranslations: pendingByBook.get(book.id) ?? 0,
+    failedTranslations: failedByBook.get(book.id) ?? 0,
   }));
 
   return NextResponse.json(booksWithProgress);
