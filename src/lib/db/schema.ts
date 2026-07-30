@@ -180,7 +180,73 @@ export const vocabulary = sqliteTable("vocabulary", {
   lastReviewedAt: text("last_reviewed_at"),
   correctCount: integer("correct_count").notNull().default(0),
   incorrectCount: integer("incorrect_count").notNull().default(0),
+  // FSRS scheduling (migration 0016). NULL state = card still on the
+  // legacy Leitner ladder; the scheduler seeds FSRS memory from `stage`
+  // on its first post-migration review. See src/lib/learning/fsrs.ts.
+  stability: real("stability"),
+  difficulty: real("difficulty"),
+  state: text("state"), // 'new' | 'learning' | 'review' | 'relearning'
+  lapses: integer("lapses").notNull().default(0),
+  // Span of `word` inside sourceContext, for cloze cards. NULL when the
+  // word wasn't located (legacy saves or paraphrased selections).
+  contextWordStart: integer("context_word_start"),
+  contextWordEnd: integer("context_word_end"),
+  // Dictionary form (migration 0017). `word` keeps whatever the user
+  // selected; lemma links the card to reader tokens and corpus search.
+  lemma: text("lemma"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// One row per SRS review event. Never updated — the append-only log feeds
+// the dashboard (streaks, retention) and future FSRS parameter tuning.
+export const reviewLogs = sqliteTable("review_logs", {
+  id: text("id").primaryKey(),
+  vocabularyId: text("vocabulary_id").notNull()
+    .references(() => vocabulary.id, { onDelete: "cascade" }),
+  userId: text("user_id"),
+  rating: text("rating").notNull(), // 'again' | 'hard' | 'good' | 'easy'
+  stateBefore: text("state_before"),
+  stageBefore: integer("stage_before"),
+  stabilityBefore: real("stability_before"),
+  difficultyBefore: real("difficulty_before"),
+  elapsedDays: real("elapsed_days"),
+  scheduledDays: real("scheduled_days"),
+  reviewedAt: text("reviewed_at").notNull(),
+});
+
+// Explicit per-lemma knowledge marks for immersive reading. 'learning' is
+// implied by a vocabulary row; this table only stores what the user
+// explicitly marked: 'known' (skip highlighting) or 'ignored' (names,
+// numbers, noise). Unique per (user, lang, lemma).
+export const wordStatus = sqliteTable("word_status", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  lang: text("lang").notNull(),
+  lemma: text("lemma").notNull(),
+  status: text("status").notNull(), // 'known' | 'ignored'
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
+// Space-joined kuromoji base forms per paragraph, written by app code at
+// import/backfill time (SQL triggers cannot tokenize Japanese). The FTS5
+// mirror paragraph_lemmas_fts is maintained by triggers in migration 0017.
+export const paragraphLemmas = sqliteTable("paragraph_lemmas", {
+  paragraphId: text("paragraph_id").primaryKey()
+    .references(() => paragraphs.id, { onDelete: "cascade" }),
+  lemmas: text("lemmas").notNull(),
+});
+
+// One row per (user, day, book): accumulated reading time and characters.
+// Fed by the reader's throttled heartbeat; drives the learning dashboard.
+export const readingSessions = sqliteTable("reading_sessions", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  bookId: text("book_id"), // nullable, no cascade — history survives book deletion
+  day: text("day").notNull(), // YYYY-MM-DD (UTC)
+  charsRead: integer("chars_read").notNull().default(0),
+  durationMs: integer("duration_ms").notNull().default(0),
   updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 

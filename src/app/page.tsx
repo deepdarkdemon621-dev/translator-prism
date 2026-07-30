@@ -220,6 +220,7 @@ export default function HomePage() {
     // Dictionaries: admin-only (install/manage surface). Lookup stays open
     // for all users inside the reader popover.
     { href: "/dictionary", label: "Dictionaries", adminOnly: true },
+    { href: "/learn", label: "Learn", adminOnly: false },
     { href: "/vocabulary", label: "Vocabulary", adminOnly: false },
     { href: "/progress", label: "Progress", adminOnly: false },
     { href: "/settings", label: "Settings", adminOnly: false },
@@ -495,6 +496,7 @@ export default function HomePage() {
             // Dictionaries: admin-only (install/manage surface). Lookup
             // stays open for all users inside the reader popover.
             { href: "/dictionary", label: "Dictionaries", adminOnly: true },
+            { href: "/learn", label: "Learn", adminOnly: false },
             { href: "/vocabulary", label: "Vocabulary", adminOnly: false },
             { href: "/progress", label: "Progress", adminOnly: false },
             { href: "/settings", label: "Settings", adminOnly: false },

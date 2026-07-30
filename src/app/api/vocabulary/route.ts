@@ -80,6 +80,9 @@ export async function POST(request: NextRequest) {
     note?: string | null;
     sourceBookId?: string | null;
     sourceContext?: string | null;
+    lemma?: string | null;
+    contextWordStart?: number | null;
+    contextWordEnd?: number | null;
   };
   try {
     body = await request.json();
@@ -119,6 +122,9 @@ export async function POST(request: NextRequest) {
         note: body.note ?? existing.note,
         sourceBookId: body.sourceBookId ?? existing.sourceBookId,
         sourceContext: body.sourceContext ?? existing.sourceContext,
+        lemma: body.lemma ?? existing.lemma,
+        contextWordStart: body.contextWordStart ?? existing.contextWordStart,
+        contextWordEnd: body.contextWordEnd ?? existing.contextWordEnd,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(vocabulary.id, existing.id))
@@ -139,6 +145,9 @@ export async function POST(request: NextRequest) {
       note: body.note ?? null,
       sourceBookId: body.sourceBookId ?? null,
       sourceContext: body.sourceContext ?? null,
+      lemma: body.lemma ?? null,
+      contextWordStart: body.contextWordStart ?? null,
+      contextWordEnd: body.contextWordEnd ?? null,
     })
     .run();
 

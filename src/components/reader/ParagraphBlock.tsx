@@ -1,5 +1,21 @@
 "use client";
 
+import type { ReactNode } from "react";
+
+/** [start, end, lemma] span inside the paragraph text — the compact wire
+ * format from /api/chapters/[id]/tokens. */
+export type TokenSpan = [number, number, string];
+
+export type TokenKnowledge = "unknown" | "learning" | "known";
+
+export interface TokenClickPayload {
+  paragraphId: string;
+  lemma: string;
+  surface: string;
+  rect: DOMRect;
+  contextText: string;
+}
+
 interface ParagraphBlockProps {
   id: string;
   text: string;
@@ -14,6 +30,59 @@ interface ParagraphBlockProps {
   retrying?: boolean;
   lang?: string;
   showTts?: boolean;
+  /** Immersive reading: content-word spans to tint by knowledge status. */
+  tokens?: TokenSpan[];
+  statusForLemma?: (lemma: string) => TokenKnowledge;
+  onTokenClick?: (payload: TokenClickPayload) => void;
+}
+
+const TOKEN_CLASS: Record<TokenKnowledge, string | undefined> = {
+  unknown: "reader-token-unknown",
+  learning: "reader-token-learning",
+  known: undefined,
+};
+
+function renderTokenized(
+  id: string,
+  text: string,
+  tokens: TokenSpan[],
+  statusForLemma: (lemma: string) => TokenKnowledge,
+  onTokenClick?: (payload: TokenClickPayload) => void,
+): ReactNode[] {
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const [i, [start, end, lemma]] of tokens.entries()) {
+    if (start < cursor || end > text.length) continue; // stale span; skip
+    if (start > cursor) parts.push(text.slice(cursor, start));
+    const surface = text.slice(start, end);
+    const knowledge = statusForLemma(lemma);
+    const cls = TOKEN_CLASS[knowledge];
+    parts.push(
+      <span
+        key={i}
+        className={cls}
+        onClick={
+          onTokenClick
+            ? (e) => {
+                e.stopPropagation();
+                onTokenClick({
+                  paragraphId: id,
+                  lemma,
+                  surface,
+                  rect: (e.target as HTMLElement).getBoundingClientRect(),
+                  contextText: text,
+                });
+              }
+            : undefined
+        }
+      >
+        {surface}
+      </span>,
+    );
+    cursor = end;
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
 }
 
 const LANG_VOICE: Record<string, string> = { ja: "ja-JP", zh: "zh-CN", en: "en-US" };
@@ -41,6 +110,9 @@ export function ParagraphBlock({
   retrying,
   lang,
   showTts,
+  tokens,
+  statusForLemma,
+  onTokenClick,
 }: ParagraphBlockProps) {
   const isLoading = status === "processing" || status === "pending";
   const isFailed = status === "failed";
@@ -100,7 +172,9 @@ export function ParagraphBlock({
         </span>
       ) : (
         <>
-          {text}
+          {tokens && tokens.length > 0 && statusForLemma
+            ? renderTokenized(id, text, tokens, statusForLemma, onTokenClick)
+            : text}
           {showTts && lang && text && (
             <button
               onClick={(e) => { e.stopPropagation(); speakText(text, lang); }}

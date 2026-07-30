@@ -12,9 +12,27 @@ type ReviewEntry = VocabularyEntry & {
   lastReviewedAt: string | null;
   correctCount: number;
   incorrectCount: number;
+  contextWordStart?: number | null;
+  contextWordEnd?: number | null;
 };
 
-type Rating = "again" | "good" | "easy";
+/** Cloze cards need a located word span inside the saved context. */
+function canCloze(entry: ReviewEntry): boolean {
+  return Boolean(
+    entry.sourceContext &&
+      entry.contextWordStart != null &&
+      entry.contextWordEnd != null &&
+      entry.contextWordStart < entry.contextWordEnd &&
+      entry.contextWordEnd <= entry.sourceContext.length,
+  );
+}
+
+/** Alternate recognition and cloze on successive reviews of the same card. */
+function useClozeThisTime(entry: ReviewEntry): boolean {
+  return canCloze(entry) && (entry.correctCount + entry.incorrectCount) % 2 === 1;
+}
+
+type Rating = "again" | "hard" | "good" | "easy";
 
 const LANG_VOICE: Record<string, string> = { ja: "ja-JP", zh: "zh-CN", en: "en-US" };
 
@@ -39,11 +57,11 @@ export default function VocabularyReviewPage() {
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ again: 0, good: 0, easy: 0 });
+  const [stats, setStats] = useState({ again: 0, hard: 0, good: 0, easy: 0 });
 
   const current = queue[index];
   const remaining = Math.max(0, queue.length - index);
-  const completed = stats.again + stats.good + stats.easy;
+  const completed = stats.again + stats.hard + stats.good + stats.easy;
 
   const loadDue = useCallback(async () => {
     setLoading(true);
@@ -53,7 +71,7 @@ export default function VocabularyReviewPage() {
         setQueue(await res.json());
         setIndex(0);
         setRevealed(false);
-        setStats({ again: 0, good: 0, easy: 0 });
+        setStats({ again: 0, hard: 0, good: 0, easy: 0 });
       }
     } finally {
       setLoading(false);
@@ -81,7 +99,7 @@ export default function VocabularyReviewPage() {
     [current],
   );
 
-  // Keyboard shortcuts: space reveals; 1/2/3 rate Again/Good/Easy.
+  // Keyboard shortcuts: space reveals; 1/2/3/4 rate Again/Hard/Good/Easy.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!current) return;
@@ -96,10 +114,11 @@ export default function VocabularyReviewPage() {
         return;
       }
       if (e.key === "1") handleRate("again");
-      else if (e.key === "2" || e.key === " " || e.key === "Enter") {
+      else if (e.key === "2") handleRate("hard");
+      else if (e.key === "3" || e.key === " " || e.key === "Enter") {
         e.preventDefault();
         handleRate("good");
-      } else if (e.key === "3") handleRate("easy");
+      } else if (e.key === "4") handleRate("easy");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -176,6 +195,18 @@ function ReviewCard({
   onRate: (rating: Rating) => void;
   remaining: number;
 }) {
+  const cloze = useClozeThisTime(entry);
+  if (cloze) {
+    return (
+      <ClozeCard
+        entry={entry}
+        revealed={revealed}
+        onReveal={onReveal}
+        onRate={onRate}
+        remaining={remaining}
+      />
+    );
+  }
   return (
     <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
       <div className="rounded-2xl border border-border/50 bg-card shadow-sm px-8 py-12 sm:px-12 sm:py-16 min-h-[340px] flex flex-col justify-center">
@@ -235,7 +266,7 @@ function ReviewCard({
       </div>
 
       {revealed && (
-        <div className="grid grid-cols-3 gap-3 mt-6 animate-in fade-in slide-in-from-bottom-1 duration-300">
+        <div className="grid grid-cols-4 gap-3 mt-6 animate-in fade-in slide-in-from-bottom-1 duration-300">
           <RatingButton
             label="Again"
             hint="1"
@@ -243,17 +274,108 @@ function ReviewCard({
             onClick={() => onRate("again")}
           />
           <RatingButton
+            label="Hard"
+            hint="2"
+            tone="muted"
+            onClick={() => onRate("hard")}
+          />
+          <RatingButton
             label="Good"
-            hint="2 / Space"
+            hint="3 / Space"
             tone="primary"
             onClick={() => onRate("good")}
           />
           <RatingButton
             label="Easy"
-            hint="3"
+            hint="4"
             tone="muted"
             onClick={() => onRate("easy")}
           />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ClozeCard({
+  entry,
+  revealed,
+  onReveal,
+  onRate,
+  remaining,
+}: {
+  entry: ReviewEntry;
+  revealed: boolean;
+  onReveal: () => void;
+  onRate: (rating: Rating) => void;
+  remaining: number;
+}) {
+  const context = entry.sourceContext!;
+  const start = entry.contextWordStart!;
+  const end = entry.contextWordEnd!;
+  const before = context.slice(0, start);
+  const word = context.slice(start, end);
+  const after = context.slice(end);
+
+  return (
+    <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
+      <div className="rounded-2xl border border-border/50 bg-card shadow-sm px-8 py-12 sm:px-12 sm:py-16 min-h-[340px] flex flex-col justify-center">
+        <div className="flex items-center justify-between mb-8">
+          <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground font-medium">
+            {langLabel(entry.lang)} · {stageLabel(entry.stage)} · Cloze
+          </span>
+          <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+            {remaining} left
+          </span>
+        </div>
+
+        <div className="text-center">
+          <p className="text-xl sm:text-2xl leading-relaxed text-left">
+            {before}
+            {revealed ? (
+              <span className="text-primary font-medium underline underline-offset-4">
+                {word}
+              </span>
+            ) : (
+              <span className="inline-block min-w-[3ch] border-b-2 border-primary/60 text-transparent select-none">
+                {"〇".repeat(Math.max(2, Math.min(6, word.length)))}
+              </span>
+            )}
+            {after}
+          </p>
+          <div className="text-sm text-muted-foreground mt-6">{entry.gloss}</div>
+
+          {revealed ? (
+            <div className="animate-in fade-in duration-300 mt-6">
+              <div
+                className="text-4xl font-medium tracking-tight"
+                style={{ fontFamily: "var(--font-heading)" }}
+              >
+                {entry.word}
+              </div>
+              {entry.reading && (
+                <div className="text-base text-muted-foreground italic mt-1">
+                  {entry.reading}
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              onClick={onReveal}
+              className="mt-8 text-sm text-muted-foreground hover:text-foreground transition-colors underline-offset-4 hover:underline"
+            >
+              Tap to reveal · <kbd className="px-1.5 py-0.5 text-[10px] rounded bg-muted/60 border border-border/60 ml-1">Space</kbd>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {revealed && (
+        <div className="grid grid-cols-4 gap-3 mt-6 animate-in fade-in slide-in-from-bottom-1 duration-300">
+          <RatingButton label="Again" hint="1" tone="destructive" onClick={() => onRate("again")} />
+          <RatingButton label="Hard" hint="2" tone="muted" onClick={() => onRate("hard")} />
+          <RatingButton label="Good" hint="3 / Space" tone="primary" onClick={() => onRate("good")} />
+          <RatingButton label="Easy" hint="4" tone="muted" onClick={() => onRate("easy")} />
         </div>
       )}
     </div>
@@ -299,7 +421,7 @@ function EmptyState({
 }: {
   hasProgress: boolean;
   onReload: () => void;
-  stats: { again: number; good: number; easy: number };
+  stats: { again: number; hard: number; good: number; easy: number };
 }) {
   return (
     <div className="rounded-2xl border border-border/50 bg-card shadow-sm px-8 py-16 text-center animate-in fade-in duration-500">
@@ -311,7 +433,7 @@ function EmptyState({
       </p>
       <p className="text-muted-foreground text-sm mb-8">
         {hasProgress
-          ? `${stats.again} again · ${stats.good} good · ${stats.easy} easy`
+          ? `${stats.again} again · ${stats.hard} hard · ${stats.good} good · ${stats.easy} easy`
           : "Come back later, or add more words from the reader."}
       </p>
       <div className="flex items-center justify-center gap-3">

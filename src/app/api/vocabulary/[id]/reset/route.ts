@@ -32,6 +32,10 @@ export async function POST(
     .update(vocabulary)
     .set({
       stage: 0,
+      // Clear FSRS memory too, so the card restarts as genuinely new.
+      state: "new",
+      stability: 0,
+      difficulty: null,
       nextReviewAt: nowIso,
       lastReviewedAt: null,
       updatedAt: nowIso,

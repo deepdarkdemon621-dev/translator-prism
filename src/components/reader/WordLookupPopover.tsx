@@ -9,6 +9,8 @@ export interface WordSelection {
   lang: string;
   rect: DOMRect;
   contextText: string;
+  /** Dictionary form when the popover was opened from a reader token. */
+  lemma?: string;
 }
 
 interface LookupResult {
@@ -26,9 +28,32 @@ interface WordLookupPopoverProps {
   selection: WordSelection;
   bookId: string;
   onClose: () => void;
+  /** Immersive reading: mark the selection's lemma known/ignored. */
+  onMarkStatus?: (lemma: string, status: "known" | "ignored") => void;
+  /** Notify the reader a word was saved so it can tint it as learning. */
+  onSavedWord?: (lemma: string) => void;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
+
+interface CorpusExample {
+  paragraphId: string;
+  text: string;
+  bookId: string;
+  bookTitle: string;
+  chapterTitle: string;
+}
+
+// Long paragraphs are trimmed around the first occurrence of the word (or
+// just the head when the occurrence is conjugated out of literal view).
+function excerpt(text: string, word: string, span = 60): string {
+  if (text.length <= span * 2) return text;
+  const at = text.indexOf(word);
+  if (at < 0) return `${text.slice(0, span * 2)}…`;
+  const start = Math.max(0, at - span);
+  const end = Math.min(text.length, at + word.length + span);
+  return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
+}
 
 const LANG_VOICE: Record<string, string> = { ja: "ja-JP", zh: "zh-CN", en: "en-US" };
 
@@ -52,11 +77,19 @@ function speak(text: string, lang: string) {
   window.speechSynthesis.speak(u);
 }
 
-export function WordLookupPopover({ selection, bookId, onClose }: WordLookupPopoverProps) {
+export function WordLookupPopover({
+  selection,
+  bookId,
+  onClose,
+  onMarkStatus,
+  onSavedWord,
+}: WordLookupPopoverProps) {
   const [loading, setLoading] = useState(true);
   const [results, setResults] = useState<LookupResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<Record<number, SaveState>>({});
+  const [examples, setExamples] = useState<CorpusExample[]>([]);
+  const [examplesTotal, setExamplesTotal] = useState(0);
   const popoverRef = useRef<HTMLDivElement>(null);
 
   // Fetch dictionary entries
@@ -67,7 +100,12 @@ export function WordLookupPopover({ selection, bookId, onClose }: WordLookupPopo
     fetch("/api/dict/lookup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lang: selection.lang, query: selection.word }),
+      // Token clicks carry the dictionary form — look that up directly so
+      // conjugated surfaces (会った) hit their headword (会う).
+      body: JSON.stringify({
+        lang: selection.lang,
+        query: selection.lemma ?? selection.word,
+      }),
       signal: controller.signal,
     })
       .then(async (r) => {
@@ -84,7 +122,28 @@ export function WordLookupPopover({ selection, bookId, onClose }: WordLookupPopo
         setLoading(false);
       });
     return () => controller.abort();
-  }, [selection.lang, selection.word]);
+  }, [selection.lang, selection.word, selection.lemma]);
+
+  // Real occurrences from the user's own library (ja lemma index).
+  useEffect(() => {
+    if (selection.lang !== "ja") return;
+    const lemma = selection.lemma ?? selection.word;
+    const controller = new AbortController();
+    setExamples([]);
+    setExamplesTotal(0);
+    fetch(`/api/corpus/examples?lemma=${encodeURIComponent(lemma)}`, {
+      signal: controller.signal,
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { examples: CorpusExample[]; total: number } | null) => {
+        if (data) {
+          setExamples(data.examples);
+          setExamplesTotal(data.total);
+        }
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [selection.lang, selection.lemma, selection.word]);
 
   // Close on outside click or ESC
   useEffect(() => {
@@ -112,6 +171,11 @@ export function WordLookupPopover({ selection, bookId, onClose }: WordLookupPopo
   const handleSave = useCallback(
     async (index: number, result: LookupResult) => {
       setSaveState((s) => ({ ...s, [index]: "saving" }));
+      // Locate the selected surface inside the context so cloze cards can
+      // blank exactly this occurrence later.
+      const context = selection.contextText || "";
+      const wordAt = context.indexOf(selection.word);
+      const lemma = selection.lemma ?? result.headword ?? selection.word;
       try {
         const res = await fetch("/api/vocabulary", {
           method: "POST",
@@ -122,16 +186,20 @@ export function WordLookupPopover({ selection, bookId, onClose }: WordLookupPopo
             reading: result.reading || null,
             gloss: truncateGloss(result.gloss, selection.lang),
             sourceBookId: bookId,
-            sourceContext: selection.contextText || null,
+            sourceContext: context || null,
+            lemma,
+            contextWordStart: wordAt >= 0 ? wordAt : null,
+            contextWordEnd: wordAt >= 0 ? wordAt + selection.word.length : null,
           }),
         });
         if (!res.ok) throw new Error("Save failed");
         setSaveState((s) => ({ ...s, [index]: "saved" }));
+        onSavedWord?.(lemma);
       } catch {
         setSaveState((s) => ({ ...s, [index]: "error" }));
       }
     },
-    [selection, bookId],
+    [selection, bookId, onSavedWord],
   );
 
   // Position: place popover below the selection, clamp to viewport.
@@ -240,13 +308,57 @@ export function WordLookupPopover({ selection, bookId, onClose }: WordLookupPopo
         </ul>
       )}
 
-      <div className="mt-3 pt-2 border-t border-border">
+      {examples.length > 0 && (
+        <div className="mt-3 pt-2 border-t border-border">
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5">
+            In your library{examplesTotal > examples.length ? ` (${examplesTotal}+)` : ` (${examples.length})`}
+          </div>
+          <ul className="space-y-1.5">
+            {examples.map((ex) => (
+              <li key={ex.paragraphId} className="text-xs leading-relaxed">
+                <span className="text-foreground/85">
+                  {excerpt(ex.text, selection.word)}
+                </span>
+                <span className="text-muted-foreground/70 ml-1">
+                  — {ex.bookTitle}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="mt-3 pt-2 border-t border-border flex items-center justify-between gap-2">
         <Link
           href="/vocabulary"
           className="text-xs text-muted-foreground hover:text-foreground transition-colors"
         >
           View Vocabulary →
         </Link>
+        {onMarkStatus && selection.lemma && (
+          <span className="flex items-center gap-1.5">
+            <button
+              onClick={() => {
+                onMarkStatus(selection.lemma!, "known");
+                onClose();
+              }}
+              className="text-xs px-2 py-1 rounded border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors"
+              title="I know this word — stop highlighting it"
+            >
+              ✓ Known
+            </button>
+            <button
+              onClick={() => {
+                onMarkStatus(selection.lemma!, "ignored");
+                onClose();
+              }}
+              className="text-xs px-2 py-1 rounded border border-border hover:border-foreground/40 hover:bg-muted/40 transition-colors text-muted-foreground"
+              title="Ignore this token (names, noise)"
+            >
+              Ignore
+            </button>
+          </span>
+        )}
       </div>
     </div>
   );

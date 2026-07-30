@@ -21,6 +21,9 @@ export interface ReaderPrefs {
   // the pre-2026-04 behavior (primary use case is JA novels with ZH first).
   langOrder: ReaderLang[];
   visibleLangs: ReaderLang[];
+  // Immersive reading (L3): tokenize source-language paragraphs and tint
+  // words by knowledge status. Japanese-only for now.
+  highlightUnknown: boolean;
 }
 
 export const DEFAULT_READER_PREFS: ReaderPrefs = {
@@ -35,6 +38,7 @@ export const DEFAULT_READER_PREFS: ReaderPrefs = {
   },
   langOrder: DEFAULT_LANG_ORDER,
   visibleLangs: DEFAULT_LANG_ORDER,
+  highlightUnknown: true,
 };
 
 const STORAGE_KEY = "reader-prefs.v1";

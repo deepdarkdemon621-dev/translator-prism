@@ -237,3 +237,16 @@
     transform: translateY(0);
   }
 }
+
+/* Immersive reading (L3): word-knowledge tints in the source column.
+   Unknown words get a soft wash, learning words a dotted underline;
+   known/ignored words render as plain text. */
+@utility reader-token-unknown {
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  border-radius: 3px;
+  cursor: pointer;
+}
+@utility reader-token-learning {
+  border-bottom: 2px dotted color-mix(in srgb, var(--primary) 55%, transparent);
+  cursor: pointer;
+}

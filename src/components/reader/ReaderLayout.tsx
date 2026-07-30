@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { TopBar } from "./TopBar";
 import { BottomBar } from "./BottomBar";
 import { ChapterSidebar } from "./ChapterSidebar";
@@ -14,6 +14,8 @@ import {
   toggleVisibleLang,
   type ReaderLang,
 } from "@/lib/reader/language-selection";
+import type { TokenClickPayload, TokenKnowledge, TokenSpan } from "./ParagraphBlock";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 interface Chapter {
   id: string;
@@ -75,6 +77,16 @@ export function ReaderLayout({
   const { prefs: settings, setPrefs: setSettings, update: updateSettings } = useReaderPrefs();
   const [wordSelection, setWordSelection] = useState<WordSelection | null>(null);
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+  const confirm = useConfirm();
+
+  // ---- Immersive reading (L3): tokens + word knowledge ----
+  const immersiveActive = sourceLang === "ja" && settings.highlightUnknown;
+  const [tokenMap, setTokenMap] = useState<Record<string, TokenSpan[]>>({});
+  const [knowledge, setKnowledge] = useState<{
+    statuses: Record<string, string>;
+    learning: Set<string>;
+  } | null>(null);
+  const tokenCacheRef = useRef(new Map<string, Record<string, TokenSpan[]>>());
 
   const currentChapter = chapters.find((ch) => ch.index === currentIndex);
   const visibleLangs = orderVisibleLangs(
@@ -133,6 +145,188 @@ export function ReaderLayout({
     });
     return () => cancelAnimationFrame(frame);
   }, [pendingScrollId, visibleLangs]);
+
+  // Load the user's word-knowledge map once per session (ja only).
+  useEffect(() => {
+    if (!immersiveActive) return;
+    let cancelled = false;
+    fetch("/api/word-status?lang=ja")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { statuses: Record<string, string>; learning: string[] } | null) => {
+        if (!cancelled && data) {
+          setKnowledge({ statuses: data.statuses, learning: new Set(data.learning) });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [immersiveActive]);
+
+  // Fetch token spans for the current chapter (memoized per chapter).
+  useEffect(() => {
+    if (!immersiveActive) return;
+    const ch = chapters.find((c) => c.index === currentIndex);
+    if (!ch) return;
+    const cached = tokenCacheRef.current.get(ch.id);
+    if (cached) {
+      setTokenMap(cached);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/chapters/${ch.id}/tokens`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { tokens: Record<string, TokenSpan[]> } | null) => {
+        if (cancelled || !data) return;
+        tokenCacheRef.current.set(ch.id, data.tokens);
+        if (tokenCacheRef.current.size > 5) {
+          const oldest = tokenCacheRef.current.keys().next().value;
+          if (oldest != null && oldest !== ch.id) tokenCacheRef.current.delete(oldest);
+        }
+        setTokenMap(data.tokens);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [immersiveActive, chapters, currentIndex]);
+
+  const statusForLemma = useCallback(
+    (lemma: string): TokenKnowledge => {
+      if (!knowledge) return "known"; // render plain until the map loads
+      const mark = knowledge.statuses[lemma];
+      if (mark === "known" || mark === "ignored") return "known";
+      if (knowledge.learning.has(lemma)) return "learning";
+      return "unknown";
+    },
+    [knowledge],
+  );
+
+  const handleTokenClick = useCallback(
+    (payload: TokenClickPayload) => {
+      setWordSelection({
+        word: payload.surface,
+        lemma: payload.lemma,
+        lang: sourceLang,
+        rect: payload.rect,
+        contextText: payload.contextText,
+      });
+    },
+    [sourceLang],
+  );
+
+  const handleMarkStatus = useCallback(
+    (lemma: string, status: "known" | "ignored") => {
+      setKnowledge((prev) =>
+        prev
+          ? { ...prev, statuses: { ...prev.statuses, [lemma]: status } }
+          : prev,
+      );
+      fetch("/api/word-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: "ja", lemma, status }),
+      }).catch(() => {});
+    },
+    [],
+  );
+
+  const handleSavedWord = useCallback((lemma: string) => {
+    setKnowledge((prev) =>
+      prev
+        ? { ...prev, learning: new Set(prev.learning).add(lemma) }
+        : prev,
+    );
+  }, []);
+
+  // Chapter coverage: share of content tokens whose lemma isn't unknown.
+  const coverage = useMemo(() => {
+    if (!immersiveActive || !knowledge || !content) return null;
+    let total = 0;
+    let unknownTokens = 0;
+    const unknownLemmas = new Set<string>();
+    for (const p of content.paragraphs) {
+      const toks = tokenMap[p.id];
+      if (!toks) continue;
+      for (const [, , lemma] of toks) {
+        total++;
+        if (statusForLemma(lemma) === "unknown") {
+          unknownTokens++;
+          unknownLemmas.add(lemma);
+        }
+      }
+    }
+    if (total === 0) return null;
+    return {
+      pct: Math.round(((total - unknownTokens) / total) * 100),
+      unknownLemmas,
+    };
+  }, [immersiveActive, knowledge, content, tokenMap, statusForLemma]);
+
+  const handleMarkRestKnown = useCallback(async () => {
+    if (!coverage || coverage.unknownLemmas.size === 0) return;
+    const lemmas = Array.from(coverage.unknownLemmas);
+    if (
+      !(await confirm({
+        title: `Mark ${lemmas.length} words as known?`,
+        description:
+          "Every remaining highlighted word in this chapter will stop being highlighted everywhere.",
+        confirmText: "Mark known",
+      }))
+    )
+      return;
+    setKnowledge((prev) => {
+      if (!prev) return prev;
+      const statuses = { ...prev.statuses };
+      for (const l of lemmas) if (!statuses[l]) statuses[l] = "known";
+      return { ...prev, statuses };
+    });
+    fetch("/api/word-status", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lang: "ja", lemmas, status: "known" }),
+    }).catch(() => {});
+  }, [coverage, confirm]);
+
+  // ---- Reading heartbeat (L6): one minute of visible reading per ping;
+  // chapter characters are credited when the user moves forward past a
+  // chapter (they presumably read it). Throttled to protect Turso quota.
+  const localDay = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const sendSession = useCallback(
+    (payload: { durationMs?: number; charsRead?: number }) => {
+      fetch("/api/reading-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookId, day: localDay(), ...payload }),
+      }).catch(() => {});
+    },
+    [bookId],
+  );
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!document.hidden) sendSession({ durationMs: 60_000 });
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [sendSession]);
+
+  const prevChapterRef = useRef<{ index: number; chars: number } | null>(null);
+  useEffect(() => {
+    if (!content) return;
+    const chars = content.paragraphs.reduce(
+      (sum, p) => (p.kind === "text" ? sum + p.sourceText.length : sum),
+      0,
+    );
+    const prev = prevChapterRef.current;
+    if (prev && currentIndex === prev.index + 1 && prev.chars > 0) {
+      sendSession({ charsRead: prev.chars });
+    }
+    prevChapterRef.current = { index: currentIndex, chars };
+    // content identity changes when the chapter loads; currentIndex pairs it.
+  }, [content, currentIndex, sendSession]);
 
   // Next-chapter prefetch cache. Only fully translated chapters are cached
   // — their payload is stable, so serving it on a chapter flip is safe and
@@ -326,6 +520,9 @@ export function ReaderLayout({
                     paragraphSpacing={settings.paragraphSpacing}
                     draggable={visibleLangs.length > 1}
                     onDropLang={(fromLang, toLang) => swapLangs(fromLang, toLang)}
+                    tokensByParagraph={immersiveActive ? tokenMap : undefined}
+                    statusForLemma={immersiveActive ? statusForLemma : undefined}
+                    onTokenClick={immersiveActive ? handleTokenClick : undefined}
                   />
                 ))}
               </div>
@@ -375,6 +572,23 @@ export function ReaderLayout({
         </div>
       </div>
 
+      {coverage && (
+        <div className="fixed bottom-16 right-4 z-40 flex items-center gap-2 rounded-full border border-border/60 bg-background/90 backdrop-blur-sm px-3 py-1.5 text-[11px] text-muted-foreground shadow-sm">
+          <span className="tabular-nums">
+            {coverage.pct}% known · {coverage.unknownLemmas.size} new
+          </span>
+          {coverage.unknownLemmas.size > 0 && (
+            <button
+              onClick={handleMarkRestKnown}
+              className="text-primary hover:underline underline-offset-2"
+              title="Mark every remaining highlighted word in this chapter as known"
+            >
+              Mark rest known
+            </button>
+          )}
+        </div>
+      )}
+
       <BottomBar
         currentIndex={currentIndex}
         totalChapters={chapters.length}
@@ -393,6 +607,8 @@ export function ReaderLayout({
         <WordLookupPopover
           selection={wordSelection}
           bookId={bookId}
+          onMarkStatus={immersiveActive ? handleMarkStatus : undefined}
+          onSavedWord={immersiveActive ? handleSavedWord : undefined}
           onClose={() => {
             setWordSelection(null);
             window.getSelection()?.removeAllRanges();

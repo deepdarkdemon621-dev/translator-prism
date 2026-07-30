@@ -115,6 +115,19 @@ export function SettingsDrawer({
               </SelectContent>
             </Select>
           </div>
+          {/* Immersive reading: unknown-word highlighting (ja source only) */}
+          <div className="flex items-center justify-between">
+            <Label htmlFor="highlight-unknown" className="block">
+              Highlight unknown words
+            </Label>
+            <input
+              id="highlight-unknown"
+              type="checkbox"
+              className="h-4 w-4 accent-[var(--primary)] cursor-pointer"
+              checked={settings.highlightUnknown}
+              onChange={(e) => update({ highlightUnknown: e.target.checked })}
+            />
+          </div>
           <Separator />
           {/* Fonts per language */}
           {(["ja", "zh", "en"] as const).map((lang) => (

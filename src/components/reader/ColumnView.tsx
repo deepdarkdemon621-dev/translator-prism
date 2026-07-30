@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ParagraphBlock } from "./ParagraphBlock";
+import {
+  ParagraphBlock,
+  type TokenClickPayload,
+  type TokenKnowledge,
+  type TokenSpan,
+} from "./ParagraphBlock";
 import type { WordSelection } from "./WordLookupPopover";
 
 interface Paragraph {
@@ -45,6 +50,10 @@ interface ColumnViewProps {
   // is the dragged column's lang (source of the swap), `toLang` is this
   // column's own lang. Caller swaps them in the prefs order.
   onDropLang?: (fromLang: string, toLang: string) => void;
+  /** Immersive reading: token spans per paragraph id (source column only). */
+  tokensByParagraph?: Record<string, TokenSpan[]>;
+  statusForLemma?: (lemma: string) => TokenKnowledge;
+  onTokenClick?: (payload: TokenClickPayload) => void;
 }
 
 const MAX_SELECTION_LENGTH = 50;
@@ -67,6 +76,9 @@ export function ColumnView({
   draggable = false,
   onDragStartLang,
   onDropLang,
+  tokensByParagraph,
+  statusForLemma,
+  onTokenClick,
 }: ColumnViewProps) {
   const isSourceColumn = lang === sourceLang;
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -202,6 +214,9 @@ export function ColumnView({
                 retrying={retryingIds?.has(p.id)}
                 lang={lang}
                 showTts
+                tokens={isSource ? tokensByParagraph?.[p.id] : undefined}
+                statusForLemma={isSource ? statusForLemma : undefined}
+                onTokenClick={isSource ? onTokenClick : undefined}
               />
             </div>
           );
