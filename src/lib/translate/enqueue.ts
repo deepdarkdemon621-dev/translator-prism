@@ -23,16 +23,20 @@ export interface EnqueueResult {
 // of parameters for our row width; matches the upload route's batch size.
 const INSERT_CHUNK = 500;
 
-// Compound-select chunk size for the conditional pending insert below.
-// SQLITE_MAX_COMPOUND_SELECT defaults to 500 terms; stay under it.
+// Multi-row VALUES chunk for the conditional pending insert below. Three
+// parameters per row keeps a chunk well inside statement param limits.
 const CONDITIONAL_INSERT_CHUNK = 400;
 
 /**
  * Insert pending translation rows only where no row for the same
- * (paragraph_id, lang) exists yet. A concurrent enqueue can insert the same
- * key between a caller's existence read and its write transaction; there is
- * no unique index to lean on until gated migration 0014, so every row is
- * guarded with NOT EXISTS. One statement per chunk.
+ * (paragraph_id, lang) exists yet. Migration 0014's unique index
+ * idx_translations_paragraph_lang enforces the invariant, so a plain
+ * ON CONFLICT DO NOTHING covers the concurrent-enqueue race. The previous
+ * pre-0014 NOT EXISTS guard used a UNION ALL compound SELECT, which the
+ * Turso server rejects at this chunk size ("too many terms in compound
+ * SELECT") even though local file: databases accept it — that server-side
+ * failure aborted translate-all mid-book on every chapter large enough to
+ * fill a chunk. One statement per chunk.
  */
 export async function insertPendingTranslationsIfAbsent(
   executor: Pick<ReturnType<typeof getDb>, "run">,
@@ -41,21 +45,16 @@ export async function insertPendingTranslationsIfAbsent(
 ): Promise<void> {
   for (let i = 0; i < rows.length; i += CONDITIONAL_INSERT_CHUNK) {
     const chunk = rows.slice(i, i + CONDITIONAL_INSERT_CHUNK);
-    const candidates = sql.join(
+    const values = sql.join(
       chunk.map(
-        (row) =>
-          sql`SELECT ${row.id} AS id, ${row.paragraphId} AS paragraph_id, ${row.lang} AS lang`,
+        (row) => sql`(${row.id}, ${row.paragraphId}, ${row.lang}, 'pending', ${now}, ${now})`,
       ),
-      sql` UNION ALL `,
+      sql`, `,
     );
     await executor.run(sql`
       INSERT INTO translations (id, paragraph_id, lang, status, created_at, updated_at)
-      SELECT c.id, c.paragraph_id, c.lang, 'pending', ${now}, ${now}
-      FROM (${candidates}) AS c
-      WHERE NOT EXISTS (
-        SELECT 1 FROM translations t
-        WHERE t.paragraph_id = c.paragraph_id AND t.lang = c.lang
-      )`);
+      VALUES ${values}
+      ON CONFLICT (paragraph_id, lang) DO NOTHING`);
   }
 }
 
