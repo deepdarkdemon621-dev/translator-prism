@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import * as cheerio from "cheerio";
 import type { Element } from "domhandler";
+import { textWithImageAlts } from "./inline-text";
 
 // Narrow set of image mime types we persist. Anything else we either
 // infer from the file extension or skip. Keep this list in sync with
@@ -288,8 +289,11 @@ export async function parseEpub(buffer: Buffer): Promise<ParsedEpub> {
         const tag = node.tagName?.toLowerCase();
         if (tag === "p") {
           const $el = $ch(node);
-          const text = $el.text().trim();
-          if (text.length > 0) {
+          const rawText = $el.text().trim();
+          if (rawText.length > 0) {
+            // Inline gaiji image alts into the stored text; markup keeps
+            // the original <img> for display.
+            const text = textWithImageAlts($ch, node).trim();
             const markup = $ch.html(node) || "";
             paragraphs.push({ text, markup, kind: "text" });
             // Don't descend further; nested <img> inside text paragraphs

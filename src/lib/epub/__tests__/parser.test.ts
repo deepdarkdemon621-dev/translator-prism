@@ -124,6 +124,37 @@ describe("parseEpub image support", () => {
     expect(paras[0].markup).toContain('src="images/plate.jpg"');
   });
 
+  it("inlines gaiji image alt text into surrounding paragraph text", async () => {
+    // Old JP EPUBs render rare kanji as small inline images (gaiji) whose
+    // glyph lives in alt. Dropping them mangles names: 櫛田 -> 田.
+    const buf = await buildEpub({
+      chapters: [
+        `<p>それが出来るのは『<img src="../images/gaiji.png" alt="櫛" class="gaiji"/>田』だろう。</p>`,
+      ],
+      imageFiles: { "images/gaiji.png": Buffer.from([0x1]) },
+    });
+    const parsed = await parseEpub(buf);
+    const paras = parsed.chapters[0].paragraphs;
+    expect(paras).toHaveLength(1);
+    expect(paras[0].kind).toBe("text");
+    expect(paras[0].text).toBe("それが出来るのは『櫛田』だろう。");
+    // Markup keeps the original inline image for display.
+    expect(paras[0].markup).toContain("gaiji");
+  });
+
+  it("ignores empty-alt inline images when building paragraph text", async () => {
+    const buf = await buildEpub({
+      chapters: [
+        `<p>前<img src="../images/deco.png" alt=""/>後</p>`,
+      ],
+      imageFiles: { "images/deco.png": Buffer.from([0x1]) },
+    });
+    const parsed = await parseEpub(buf);
+    const paras = parsed.chapters[0].paragraphs;
+    expect(paras).toHaveLength(1);
+    expect(paras[0].text).toBe("前後");
+  });
+
   it("dedups images referenced from multiple chapters", async () => {
     const buf = await buildEpub({
       chapters: [

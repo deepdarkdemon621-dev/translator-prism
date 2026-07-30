@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db";
 import { books, chapters, paragraphs, translations } from "@/lib/db/schema";
+import { textWithImageAlts } from "@/lib/epub/inline-text";
 import { getUploadsStorage } from "@/lib/storage";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
@@ -179,6 +180,218 @@ export async function enqueueChapterTranslations(
     totalParagraphs: paras.length,
     queuedChars,
   };
+}
+
+export interface BulkEnqueueResult {
+  queued: number;
+  chaptersQueued: number;
+  skippedDone: number;
+  imageOnlyMarkedDone: number;
+  extractedChapters: number;
+  /** Legacy zero-paragraph chapters deferred by the time budget. */
+  remainingChapterIds: string[];
+}
+
+// inArray parameter chunk for chapter-id filters; stays well inside
+// SQLite's default 999-variable statement limit.
+const CHAPTER_ID_CHUNK = 400;
+
+/**
+ * Enqueue many chapters of one book in a handful of queries instead of a
+ * per-chapter loop. The per-chapter loop in the translate-all route timed
+ * out on Vercel for legacy books (each chapter could trigger EPUB zip
+ * loading), leaving the tail of the book permanently un-enqueued.
+ *
+ * Chapters that already have extracted paragraphs take the cheap bulk path
+ * (three queries per ~400 chapters). Image-only chapters are marked done.
+ * Legacy chapters with no paragraphs still need per-chapter HTML
+ * extraction; those run last under `timeBudgetMs` and any remainder is
+ * returned in `remainingChapterIds` so the caller can continue later.
+ */
+export async function enqueueChaptersBulk(
+  chapterIds: string[],
+  sourceLang: string,
+  opts: { timeBudgetMs?: number } = {},
+): Promise<BulkEnqueueResult> {
+  const db = getDb();
+  const startedAt = Date.now();
+  const timeBudgetMs = opts.timeBudgetMs ?? Number.POSITIVE_INFINITY;
+  const ids = Array.from(new Set(chapterIds));
+
+  const result: BulkEnqueueResult = {
+    queued: 0,
+    chaptersQueued: 0,
+    skippedDone: 0,
+    imageOnlyMarkedDone: 0,
+    extractedChapters: 0,
+    remainingChapterIds: [],
+  };
+  if (ids.length === 0) return result;
+
+  // Classify every chapter with one aggregate per chunk.
+  const withText: string[] = [];
+  const imageOnly: string[] = [];
+  const empty: string[] = [];
+  const counted = new Set<string>();
+  for (let i = 0; i < ids.length; i += CHAPTER_ID_CHUNK) {
+    const chunk = ids.slice(i, i + CHAPTER_ID_CHUNK);
+    const rows = await db
+      .select({
+        chapterId: paragraphs.chapterId,
+        totalCount: sql<number>`COUNT(*)`,
+        textCount: sql<number>`SUM(CASE WHEN ${paragraphs.kind} = 'text' THEN 1 ELSE 0 END)`,
+      })
+      .from(paragraphs)
+      .where(inArray(paragraphs.chapterId, chunk))
+      .groupBy(paragraphs.chapterId)
+      .all();
+    for (const row of rows) {
+      counted.add(row.chapterId);
+      if (Number(row.textCount) > 0) withText.push(row.chapterId);
+      else if (Number(row.totalCount) > 0) imageOnly.push(row.chapterId);
+    }
+  }
+  for (const id of ids) {
+    if (!counted.has(id)) empty.push(id);
+  }
+
+  // Image-only chapters: nothing translatable, mark done in bulk.
+  if (imageOnly.length > 0) {
+    const now = new Date().toISOString();
+    for (let i = 0; i < imageOnly.length; i += CHAPTER_ID_CHUNK) {
+      await db
+        .update(chapters)
+        .set({ status: "done", updatedAt: now })
+        .where(inArray(chapters.id, imageOnly.slice(i, i + CHAPTER_ID_CHUNK)));
+    }
+    result.imageOnlyMarkedDone = imageOnly.length;
+  }
+
+  // Bulk path: all text paragraphs plus their existing translations for the
+  // whole chapter set, then the same prefer-done/skip-processing merge as
+  // the single-chapter enqueue.
+  if (withText.length > 0) {
+    const targetLangs = TARGET_LANGS[sourceLang] || ["zh", "en"];
+    const paras: { id: string; chapterId: string; sourceText: string }[] = [];
+    const existing: {
+      id: string;
+      paragraphId: string;
+      lang: string;
+      status: string;
+    }[] = [];
+    for (let i = 0; i < withText.length; i += CHAPTER_ID_CHUNK) {
+      const chunk = withText.slice(i, i + CHAPTER_ID_CHUNK);
+      paras.push(
+        ...(await db
+          .select({
+            id: paragraphs.id,
+            chapterId: paragraphs.chapterId,
+            sourceText: paragraphs.sourceText,
+          })
+          .from(paragraphs)
+          .where(
+            and(inArray(paragraphs.chapterId, chunk), eq(paragraphs.kind, "text")),
+          )
+          .orderBy(paragraphs.chapterId, paragraphs.seq)
+          .all()),
+      );
+      existing.push(
+        ...(await db
+          .select({
+            id: translations.id,
+            paragraphId: translations.paragraphId,
+            lang: translations.lang,
+            status: translations.status,
+          })
+          .from(translations)
+          .innerJoin(paragraphs, eq(paragraphs.id, translations.paragraphId))
+          .where(
+            and(inArray(paragraphs.chapterId, chunk), eq(paragraphs.kind, "text")),
+          )
+          .all()),
+      );
+    }
+
+    const existingByParaLang = new Map<string, (typeof existing)[number]>();
+    for (const t of existing) {
+      const key = `${t.paragraphId}|${t.lang}`;
+      const prior = existingByParaLang.get(key);
+      if (!prior || (prior.status !== "done" && t.status === "done")) {
+        existingByParaLang.set(key, t);
+      }
+    }
+
+    const toInsert: { id: string; paragraphId: string; lang: string }[] = [];
+    const idsToReset: string[] = [];
+    const queuedByChapter = new Map<string, number>();
+    for (const para of paras) {
+      for (const lang of targetLangs) {
+        const prior = existingByParaLang.get(`${para.id}|${lang}`);
+        if (prior && prior.status === "done") {
+          result.skippedDone++;
+          continue;
+        }
+        // Same invariant as the single-chapter path: live claims keep their
+        // generation; resetting them would double-claim under one workerId.
+        if (prior?.status === "processing") {
+          continue;
+        }
+        if (prior) {
+          idsToReset.push(prior.id);
+        } else {
+          toInsert.push({ id: randomUUID(), paragraphId: para.id, lang });
+        }
+        result.queued++;
+        queuedByChapter.set(
+          para.chapterId,
+          (queuedByChapter.get(para.chapterId) ?? 0) + 1,
+        );
+      }
+    }
+
+    if (result.queued > 0) {
+      const now = new Date().toISOString();
+      const chaptersToMark = Array.from(queuedByChapter.keys());
+      await db.transaction(async (tx) => {
+        await insertPendingTranslationsIfAbsent(tx, toInsert, now);
+        for (let i = 0; i < idsToReset.length; i += INSERT_CHUNK) {
+          await tx
+            .update(translations)
+            .set({
+              status: "pending",
+              errorMessage: null,
+              claimedBy: null,
+              leaseExpiresAt: null,
+              updatedAt: now,
+            })
+            .where(inArray(translations.id, idsToReset.slice(i, i + INSERT_CHUNK)));
+        }
+        for (let i = 0; i < chaptersToMark.length; i += CHAPTER_ID_CHUNK) {
+          await tx
+            .update(chapters)
+            .set({ status: "translating", updatedAt: now })
+            .where(inArray(chapters.id, chaptersToMark.slice(i, i + CHAPTER_ID_CHUNK)));
+        }
+      });
+      result.chaptersQueued += chaptersToMark.length;
+    }
+  }
+
+  // Legacy chapters without extracted paragraphs: expensive per-chapter
+  // path (HTML walk, possibly EPUB zip loading), bounded by the budget.
+  for (const [i, chapterId] of empty.entries()) {
+    if (Date.now() - startedAt >= timeBudgetMs) {
+      result.remainingChapterIds = empty.slice(i);
+      break;
+    }
+    const res = await enqueueChapterTranslations(chapterId, sourceLang);
+    result.extractedChapters++;
+    result.queued += res.queued;
+    result.skippedDone += res.skippedDone;
+    if (res.queued > 0) result.chaptersQueued++;
+  }
+
+  return result;
 }
 
 export async function estimateChapterWork(
@@ -487,8 +700,11 @@ export async function lazyExtractParagraphs(chapterId: string) {
       if (node.type !== "tag") return;
       const tag = node.tagName?.toLowerCase();
       if (tag === "p") {
-        const text = $(node).text().trim();
-        if (text.length > 0) {
+        const rawText = $(node).text().trim();
+        if (rawText.length > 0) {
+          // Inline gaiji image alts into the stored text; markup keeps the
+          // original <img> for display. Mirrors the eager parser.
+          const text = textWithImageAlts($, node).trim();
           const markup = $.html(node) || "";
           extracted.push({ text, markup, kind: "text" });
           return;

@@ -5,7 +5,7 @@ import { and, eq, ne } from "drizzle-orm";
 import { loadBookForWrite } from "@/lib/access";
 import { hasChapterAccess } from "@/lib/billing";
 import {
-  enqueueChapterTranslations,
+  enqueueChaptersBulk,
   estimateChapterWork,
 } from "@/lib/translate/enqueue";
 import {
@@ -106,19 +106,23 @@ export async function POST(
     });
   }
 
-  let totalQueued = 0;
-  let chaptersQueued = 0;
-  for (const ch of accessibleChapters) {
-    const res = await enqueueChapterTranslations(ch.id, book.sourceLang);
-    totalQueued += res.queued;
-    if (res.queued > 0) chaptersQueued++;
-  }
+  // Bulk enqueue instead of a per-chapter loop: the loop version timed out
+  // on Vercel for legacy books (per-chapter EPUB extraction), silently
+  // leaving the rest of the book un-enqueued. Legacy chapters that still
+  // need extraction run under a time budget; any remainder is reported so
+  // the client can re-POST to continue.
+  const res = await enqueueChaptersBulk(
+    accessibleChapters.map((ch) => ch.id),
+    book.sourceLang,
+    { timeBudgetMs: 240_000 },
+  );
 
   return NextResponse.json({
-    queued: totalQueued,
-    chaptersQueued,
+    queued: res.queued,
+    chaptersQueued: res.chaptersQueued,
     chaptersSkippedLocked: lockedSkipped,
     totalChapters: candidateChapters.length,
+    remainingChapters: res.remainingChapterIds.length,
     provider: await getActiveProviderName(),
   });
 }
