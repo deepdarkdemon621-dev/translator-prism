@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -56,11 +56,37 @@ export function SortableGridItem({
   const bookOverCollection =
     type === "collection" && isOver && active?.data.current?.type === "book";
 
+  // Releasing a drag still dispatches a native click on the element under
+  // the pointer, which would open the book/collection link inside. Arm a
+  // guard while dragging and swallow that one click in the capture phase;
+  // it clears on the next tick so ordinary clicks keep working even when
+  // the drag ended off-element and no click followed.
+  const suppressClickRef = useRef(false);
+  useEffect(() => {
+    if (isDragging) {
+      suppressClickRef.current = true;
+      return;
+    }
+    if (suppressClickRef.current) {
+      const t = setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+      return () => clearTimeout(t);
+    }
+  }, [isDragging]);
+
   return (
     <Tag
       ref={setNodeRef}
       {...attributes}
       {...listeners}
+      onClickCapture={(e) => {
+        if (suppressClickRef.current) {
+          suppressClickRef.current = false;
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
       onClick={onClick}
       className={className}
       style={{
