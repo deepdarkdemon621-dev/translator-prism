@@ -125,6 +125,24 @@ export async function GET() {
   const totalReviews = reviewRows.reduce((sum, r) => sum + Number(r.total), 0);
   const totalCorrect = reviewRows.reduce((sum, r) => sum + Number(r.correct), 0);
 
+  // Retention split per algorithm so the user can judge the Ebbinghaus
+  // curve against FSRS with their own data. Pre-0018 logs were FSRS.
+  const algoRows = await db
+    .select({
+      algorithm: sql<string>`COALESCE(${reviewLogs.algorithm}, 'fsrs')`,
+      total: sql<number>`COUNT(*)`,
+      correct: sql<number>`SUM(CASE WHEN ${reviewLogs.rating} != 'again' THEN 1 ELSE 0 END)`,
+    })
+    .from(reviewLogs)
+    .where(
+      and(
+        eq(reviewLogs.userId, user.id),
+        gte(sql`substr(${reviewLogs.reviewedAt}, 1, 10)`, since),
+      ),
+    )
+    .groupBy(sql`COALESCE(${reviewLogs.algorithm}, 'fsrs')`)
+    .all();
+
   return NextResponse.json({
     windowDays: WINDOW_DAYS,
     streak,
@@ -132,6 +150,11 @@ export async function GET() {
     dueNow: Number(totals?.due ?? 0),
     knownWords: Number(knownRow?.known ?? 0),
     retention: totalReviews > 0 ? totalCorrect / totalReviews : null,
+    retentionByAlgorithm: algoRows.map((r) => ({
+      algorithm: r.algorithm,
+      total: Number(r.total),
+      retention: Number(r.total) > 0 ? Number(r.correct) / Number(r.total) : null,
+    })),
     reviewsByDay: reviewRows.map((r) => ({
       day: r.day,
       total: Number(r.total),

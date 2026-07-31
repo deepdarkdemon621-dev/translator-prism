@@ -14,6 +14,11 @@ export const users = sqliteTable("users", {
   // coerce — callers treat truthy == admin.
   isAdmin: integer("is_admin").notNull().default(0),
   credits: integer("credits").notNull().default(0),
+  // Review scheduling preference (migration 0018). NULL = the default
+  // Ebbinghaus fixed curve; 'fsrs' opts into the adaptive scheduler.
+  // reviewIntervals is a JSON array of day counts overriding the curve.
+  reviewAlgorithm: text("review_algorithm"),
+  reviewIntervals: text("review_intervals"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
@@ -212,6 +217,8 @@ export const reviewLogs = sqliteTable("review_logs", {
   difficultyBefore: real("difficulty_before"),
   elapsedDays: real("elapsed_days"),
   scheduledDays: real("scheduled_days"),
+  // 'ebbinghaus' | 'fsrs' (migration 0018); NULL = pre-0018 rows (FSRS).
+  algorithm: text("algorithm"),
   reviewedAt: text("reviewed_at").notNull(),
 });
 

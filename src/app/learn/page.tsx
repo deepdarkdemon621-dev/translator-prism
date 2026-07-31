@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 
 interface LearningStats {
   windowDays: number;
@@ -12,10 +13,22 @@ interface LearningStats {
   dueNow: number;
   knownWords: number;
   retention: number | null;
+  retentionByAlgorithm: { algorithm: string; total: number; retention: number | null }[];
   reviewsByDay: { day: string; total: number; correct: number }[];
   readingByDay: { day: string; durationMs: number; charsRead: number }[];
   vocabAddedByDay: { day: string; added: number }[];
 }
+
+interface ReviewSettings {
+  algorithm: "ebbinghaus" | "fsrs";
+  intervals: number[];
+  isCustomIntervals: boolean;
+}
+
+const ALGO_LABELS: Record<string, string> = {
+  ebbinghaus: "Ebbinghaus curve",
+  fsrs: "FSRS adaptive",
+};
 
 const CHART_DAYS = 14;
 
@@ -103,9 +116,25 @@ export default function LearnPage() {
               <span className="text-foreground font-medium tabular-nums">
                 {Math.round(stats.retention * 100)}%
               </span>{" "}
-              of reviews rated Hard or better.
+              of reviews rated Hard or better
+              {stats.retentionByAlgorithm.length > 1 && (
+                <>
+                  {" — "}
+                  {stats.retentionByAlgorithm
+                    .map(
+                      (a) =>
+                        `${ALGO_LABELS[a.algorithm] ?? a.algorithm}: ${
+                          a.retention != null ? Math.round(a.retention * 100) : "—"
+                        }% (${a.total})`,
+                    )
+                    .join(" · ")}
+                </>
+              )}
+              .
             </p>
           )}
+
+          <ReviewSettingsCard />
 
           <ChartCard
             title="Reviews"
@@ -128,6 +157,139 @@ export default function LearnPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function ReviewSettingsCard() {
+  const toast = useToast();
+  const [settings, setSettings] = useState<ReviewSettings | null>(null);
+  const [intervalsText, setIntervalsText] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/learning/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: ReviewSettings | null) => {
+        if (!cancelled && data) {
+          setSettings(data);
+          setIntervalsText(data.intervals.join(", "));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const save = async (patch: { algorithm?: string; intervals?: number[] | null }) => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/learning/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        toast((await res.json()).error ?? "Save failed", { variant: "error" });
+        return false;
+      }
+      toast("Review settings saved.", { variant: "success" });
+      return true;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!settings) return null;
+
+  return (
+    <Card className="border-border/50 shadow-sm">
+      <CardContent className="pt-5 pb-4 space-y-4">
+        <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
+          Review scheduling
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {(["ebbinghaus", "fsrs"] as const).map((algo) => (
+            <button
+              key={algo}
+              disabled={saving}
+              onClick={async () => {
+                if (settings.algorithm === algo) return;
+                if (await save({ algorithm: algo })) {
+                  setSettings({ ...settings, algorithm: algo });
+                }
+              }}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                settings.algorithm === algo
+                  ? "border-primary bg-primary/10 text-foreground"
+                  : "border-border text-muted-foreground hover:border-primary/40"
+              }`}
+            >
+              {ALGO_LABELS[algo]}
+              {algo === "ebbinghaus" && " (default)"}
+            </button>
+          ))}
+        </div>
+        {settings.algorithm === "ebbinghaus" && (
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted-foreground block">
+              Interval ladder (days) — a card climbs one rung per Good, resets on Again
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                value={intervalsText}
+                onChange={(e) => setIntervalsText(e.target.value)}
+                placeholder="1, 2, 4, 7, 15, 30"
+                className="flex-1 text-sm px-3 py-1.5 rounded-md border border-border bg-background focus:outline-none focus:border-primary/50"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={saving}
+                onClick={async () => {
+                  const nums = intervalsText
+                    .split(/[,、\s]+/)
+                    .filter(Boolean)
+                    .map(Number);
+                  if (
+                    nums.length === 0 ||
+                    nums.length > 12 ||
+                    nums.some((n) => !Number.isFinite(n) || n <= 0 || n > 365)
+                  ) {
+                    toast("Enter 1-12 day counts between 0.5 and 365.", {
+                      variant: "error",
+                    });
+                    return;
+                  }
+                  if (await save({ intervals: nums })) {
+                    setSettings({ ...settings, intervals: nums, isCustomIntervals: true });
+                  }
+                }}
+              >
+                Save
+              </Button>
+              {settings.isCustomIntervals && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={saving}
+                  onClick={async () => {
+                    if (await save({ intervals: null })) {
+                      const def = [1, 2, 4, 7, 15, 30];
+                      setSettings({ ...settings, intervals: def, isCustomIntervals: false });
+                      setIntervalsText(def.join(", "));
+                    }
+                  }}
+                >
+                  Reset
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
