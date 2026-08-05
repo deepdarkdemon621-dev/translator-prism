@@ -67,16 +67,37 @@ export async function claimTranslationBatch(
     (opts.now ?? new Date()).getTime() + opts.leaseMs,
   ).toISOString();
 
-  const seed = await opts.client.execute({
-    sql: `SELECT p.chapter_id AS chapterId, t.lang AS lang
-          FROM translations t
-          JOIN paragraphs p ON p.id = t.paragraph_id
-          WHERE ${eligible("t")}
-          ORDER BY t.created_at, t.id
-          LIMIT 1`,
-    args: { now },
-  });
-  const seedRow = seed.rows[0];
+  // Two index-seek probes replace the old single OR seed query: the OR across
+  // status branches defeated idx_translations_status_created_id, so SQLite
+  // full-scanned paragraphs plus a temp sort tree on every claim (~10^5 rows
+  // read per call — this is what exhausted the Turso read quota). Each probe
+  // is an ordered seek; the older of the two seeds wins, preserving the
+  // "globally oldest eligible row" semantics.
+  const seedSql = (where: string) => `
+    SELECT p.chapter_id AS chapterId, t.lang AS lang,
+           t.created_at AS createdAt, t.id AS seedId
+    FROM translations t
+    JOIN paragraphs p ON p.id = t.paragraph_id
+    WHERE ${where}
+    ORDER BY t.created_at, t.id
+    LIMIT 1`;
+  const [pendingSeed, reclaimSeed] = await Promise.all([
+    opts.client.execute(seedSql("t.status = 'pending'")),
+    opts.client.execute({
+      sql: seedSql(
+        "t.status = 'processing' AND (t.lease_expires_at IS NULL OR t.lease_expires_at < :now)",
+      ),
+      args: { now },
+    }),
+  ]);
+  const seedRow = [pendingSeed.rows[0], reclaimSeed.rows[0]]
+    .filter((row) => row !== undefined)
+    .sort((a, b) => {
+      if (a.createdAt !== b.createdAt) {
+        return String(a.createdAt) < String(b.createdAt) ? -1 : 1;
+      }
+      return String(a.seedId) < String(b.seedId) ? -1 : 1;
+    })[0];
   if (!seedRow) return null;
 
   const chapterId = String(seedRow.chapterId);
